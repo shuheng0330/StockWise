@@ -2,6 +2,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from stockwise_api.contracts import CanonicalItemInput
+
 
 class ErrorEnvelope(BaseModel):
     error_code: str
@@ -64,6 +66,59 @@ class AnalysisResponse(BaseModel):
     dataset_summary: DatasetSummary
     kpi_summary: KpiSummary
     items: list[ItemAnalysis]
+
+
+class ManualItemInput(CanonicalItemInput):
+    pass
+
+
+class ManualAnalysisRequest(BaseModel):
+    items: list[ManualItemInput]
+
+
+class RecordItem(BaseModel):
+    item_id: int
+    last_updated: str
+    item_name: str
+    current_stock: float
+    unit: str
+    usage_value: float
+    usage_period: Literal["daily", "weekly"]
+    daily_usage: float
+    lead_time_days: int
+    price_per_unit: float
+    category: str | None = None
+    subcategory: str | None = None
+    supplier_name: str | None = None
+    perishability_level: Literal["low", "medium", "high"] | None = None
+    manual_reorder_level: float | None = None
+    seasonal_factor: float
+    recent_waste_percentage: float | None = None
+    recommended_action: Literal["RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"]
+
+
+class RecordsResponse(BaseModel):
+    analysis_id: str
+    dataset_summary: DatasetSummary
+    kpi_summary: KpiSummary
+    items: list[RecordItem]
+
+
+class RecordUpdateRequest(BaseModel):
+    item_name: str | None = None
+    current_stock: float | None = Field(default=None, ge=0)
+    unit: str | None = None
+    usage_value: float | None = Field(default=None, gt=0)
+    usage_period: Literal["daily", "weekly"] | None = None
+    lead_time_days: int | None = Field(default=None, gt=0)
+    price_per_unit: float | None = Field(default=None, ge=0)
+    category: str | None = None
+    subcategory: str | None = None
+    supplier_name: str | None = None
+    perishability_level: Literal["low", "medium", "high"] | None = None
+    manual_reorder_level: float | None = Field(default=None, ge=0)
+    seasonal_factor: float | None = Field(default=None, ge=0)
+    recent_waste_percentage: float | None = Field(default=None, ge=0)
 
 
 class SimulationRequest(BaseModel):
