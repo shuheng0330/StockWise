@@ -54,7 +54,9 @@ class ItemAnalysis(BaseModel):
     stock_gap_to_lead_demand: float
     reorder_urgency_score: int
     waste_risk_score: int
-    recommended_action: Literal["RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"]
+    recommended_action: Literal[
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    ]
 
 
 class AnalysisResponse(BaseModel):
@@ -83,7 +85,9 @@ class SimulationResponse(BaseModel):
     ]
     reorder_urgency_score: int
     waste_risk_score: int
-    recommended_action: Literal["RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"]
+    recommended_action: Literal[
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    ]
 
 
 class ExplanationRequest(BaseModel):
@@ -96,7 +100,9 @@ class ExplanationRequest(BaseModel):
 class ExplanationResponse(BaseModel):
     source: Literal["live", "mock", "fallback"]
     item_name: str
-    recommended_action: Literal["RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"]
+    recommended_action: Literal[
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    ]
     priority_level: Literal["HIGH", "MEDIUM", "LOW"]
     short_reason: str
     decision_explanation: str
@@ -104,3 +110,17 @@ class ExplanationResponse(BaseModel):
     suggested_next_step: str
     confidence_note: str
     warning_flag: str
+
+
+class ManualItemInput(BaseModel):
+    item_name: str
+    current_stock: float = Field(ge=0)
+    unit: str
+    usage_value: float = Field(ge=0)
+    usage_period: Literal["daily", "weekly"]
+    lead_time_days: int = Field(ge=0)
+    price_per_unit: float = Field(ge=0)
+    seasonal_factor: float = Field(ge=0, le=2.0)
+    category: str = ""
+    perishability_level: str | None = None
+    recent_waste_percentage: float | None = Field(default=None, ge=0)
