@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from io import BytesIO
+from datetime import datetime
 
 import pandas as pd
 
@@ -87,7 +88,9 @@ def validate_inventory_csv(raw_bytes: bytes) -> tuple[pd.DataFrame, DatasetSumma
             raise ValidationError(f"CSV contains negative values in {column}.")
 
     if (normalized["Daily_Usage"] <= 0).any():
-        raise ValidationError("CSV contains Daily_Usage values that are zero or negative.")
+        raise ValidationError(
+            "CSV contains Daily_Usage values that are zero or negative."
+        )
 
     normalized["Item_ID"] = pd.to_numeric(normalized["Item_ID"], errors="coerce")
     if normalized["Item_ID"].isna().any():
@@ -104,3 +107,47 @@ def validate_inventory_csv(raw_bytes: bytes) -> tuple[pd.DataFrame, DatasetSumma
         ),
     )
     return normalized, summary
+
+
+def validate_manual_items(items: list[dict]) -> tuple[pd.DataFrame, DatasetSummary]:
+    if not items:
+        raise ValidationError("No items provided.")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    rows = []
+    for idx, item in enumerate(items, start=1):
+        daily_usage = (
+            item["usage_value"]
+            if item["usage_period"] == "daily"
+            else item["usage_value"] / 7
+        )
+        if daily_usage <= 0:
+            raise ValidationError(f"Invalid usage value for item {item['item_name']}.")
+
+        row = {
+            "Date": today,
+            "Item_ID": idx,
+            "Item_Name": item["item_name"],
+            "Category": item.get("category") or "",
+            "Subcategory": "",
+            "Unit": item["unit"],
+            "Current_Stock": item["current_stock"],
+            "Reorder_Level": 0,  # Assume 0 for manual
+            "Daily_Usage": daily_usage,
+            "Lead_Time": item["lead_time_days"],
+            "Price_per_Unit": item["price_per_unit"],
+            "Supplier_Name": "",
+            "Seasonal_Factor": item["seasonal_factor"],
+            "Waste_Percentage": 0,  # Assume 0 for manual
+        }
+        rows.append(row)
+
+    dataframe = pd.DataFrame(rows)
+    dataframe["Date"] = pd.to_datetime(dataframe["Date"])
+
+    summary = DatasetSummary(
+        row_count=len(dataframe),
+        item_count=len(dataframe),
+        date_range=DateRangeSummary(start=today, end=today),
+    )
+    return dataframe, summary

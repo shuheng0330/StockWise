@@ -1,6 +1,7 @@
 from dataclasses import asdict, is_dataclass
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from stockwise_api.schemas import (
@@ -8,15 +9,27 @@ from stockwise_api.schemas import (
     ErrorEnvelope,
     ExplanationRequest,
     ExplanationResponse,
+    ManualItemInput,
     SimulationRequest,
     SimulationResponse,
 )
 from stockwise_api.services.glm import build_explanation_context, provider_from_env
 from stockwise_api.services.metrics import build_item_metrics
-from stockwise_api.services.parsing import ExplanationValidationError, build_fallback_explanation, parse_explanation_response
-from stockwise_api.services.recommendations import build_kpi_summary, build_ranked_analysis
+from stockwise_api.services.parsing import (
+    ExplanationValidationError,
+    build_fallback_explanation,
+    parse_explanation_response,
+)
+from stockwise_api.services.recommendations import (
+    build_kpi_summary,
+    build_ranked_analysis,
+)
 from stockwise_api.services.simulation import simulate_item_quantity
-from stockwise_api.services.validation import ValidationError, validate_inventory_csv
+from stockwise_api.services.validation import (
+    ValidationError,
+    validate_inventory_csv,
+    validate_manual_items,
+)
 from stockwise_api.store import InMemoryAnalysisStore
 
 
@@ -24,15 +37,29 @@ def _strip_internal_fields(payload: dict) -> dict:
     return {key: value for key, value in payload.items() if not key.startswith("_")}
 
 
-def _safe_error(status_code: int, error_code: str, message: str, details=None) -> JSONResponse:
+def _safe_error(
+    status_code: int, error_code: str, message: str, details=None
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
-        content=ErrorEnvelope(error_code=error_code, message=message, details=details).model_dump(),
+        content=ErrorEnvelope(
+            error_code=error_code, message=message, details=details
+        ).model_dump(),
     )
 
 
 def create_app(glm_provider=None) -> FastAPI:
     app = FastAPI(title="StockWise Backend", version="0.1.0")
+
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.state.store = InMemoryAnalysisStore()
     app.state.glm_provider = glm_provider or provider_from_env()
 
@@ -41,8 +68,42 @@ def create_app(glm_provider=None) -> FastAPI:
         return _safe_error(400, "validation_error", str(exc))
 
     @app.exception_handler(ExplanationValidationError)
-    async def handle_explanation_validation_error(_: Request, exc: ExplanationValidationError):
+    async def handle_explanation_validation_error(
+        _: Request, exc: ExplanationValidationError
+    ):
         return _safe_error(400, "explanation_validation_error", str(exc))
+
+    @app.get("/api/v1/analyses/{analysis_id}", response_model=AnalysisResponse)
+    async def get_analysis(analysis_id: str):
+        # 1. Try to fetch the analysis from your in-memory store
+        analysis = app.state.store.get(analysis_id)
+
+        # 2. If it doesn't exist, throw the 404 error
+        if not analysis:
+            raise HTTPException(
+                status_code=404, detail=f"Analysis {analysis_id} not found."
+            )
+
+        # 3. Format the response to match your schema
+        # We use the same _strip_internal_fields logic you used in the POST method
+        return {
+            "analysis_id": analysis_id,
+            "dataset_summary": analysis.dataset_summary,
+            "kpi_summary": analysis.kpi_summary,
+            "items": [_strip_internal_fields(item) for item in analysis.items],
+        }
+
+    @app.get("/api/v1/analyses/{analysis_id}/records")
+    async def get_analysis_records(analysis_id: str):
+        # 1. Fetch the analysis from the store
+        analysis = app.state.store.get(analysis_id)
+
+        if not analysis:
+            raise HTTPException(status_code=404, detail="Analysis records not found.")
+
+        # 2. Return the items list
+        # Ensure we use the same _strip_internal_fields logic to keep the data clean
+        return [_strip_internal_fields(item) for item in analysis.items]
 
     @app.post("/api/v1/analyses", response_model=AnalysisResponse)
     async def create_analysis(file: UploadFile = File(...)):
@@ -63,7 +124,29 @@ def create_app(glm_provider=None) -> FastAPI:
             "items": [_strip_internal_fields(item) for item in ranked_items],
         }
 
-    @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/simulate", response_model=SimulationResponse)
+    @app.post("/api/v1/manual-analyses", response_model=AnalysisResponse)
+    async def create_manual_analysis(items: list[ManualItemInput]):
+        item_dicts = [item.model_dump() for item in items]
+        normalized, summary = validate_manual_items(item_dicts)
+        metrics = build_item_metrics(normalized)
+        ranked_items = build_ranked_analysis(metrics)
+        kpis = build_kpi_summary(ranked_items)
+        analysis_id = app.state.store.create(
+            dataset_summary=asdict(summary),
+            kpi_summary=kpis,
+            items=ranked_items,
+        )
+        return {
+            "analysis_id": analysis_id,
+            "dataset_summary": asdict(summary),
+            "kpi_summary": kpis,
+            "items": [_strip_internal_fields(item) for item in ranked_items],
+        }
+
+    @app.post(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}/simulate",
+        response_model=SimulationResponse,
+    )
     async def simulate_item(analysis_id: str, item_id: int, request: SimulationRequest):
         try:
             item = app.state.store.get_item(analysis_id, item_id)
@@ -72,7 +155,10 @@ def create_app(glm_provider=None) -> FastAPI:
         simulated = simulate_item_quantity(item, request.simulated_order_qty)
         return simulated
 
-    @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/explanation", response_model=ExplanationResponse)
+    @app.post(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}/explanation",
+        response_model=ExplanationResponse,
+    )
     async def explain_item(analysis_id: str, item_id: int, request: ExplanationRequest):
         try:
             item = app.state.store.get_item(analysis_id, item_id)
