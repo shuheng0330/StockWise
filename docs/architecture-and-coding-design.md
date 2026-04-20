@@ -8,8 +8,10 @@
 
 ## Concrete Files
 - `src/stockwise_api/api/app.py`
+- `src/stockwise_api/contracts.py`
 - `src/stockwise_api/schemas.py`
 - `src/stockwise_api/store.py`
+- `src/stockwise_api/services/manual_input.py`
 - `src/stockwise_api/services/validation.py`
 - `src/stockwise_api/services/metrics.py`
 - `src/stockwise_api/services/recommendations.py`
@@ -19,8 +21,56 @@
 
 ## Planned Contracts
 - Upload analysis endpoint returns dataset summary, KPI summary, and item list.
+- Manual analysis endpoint accepts owner-friendly fields and returns the same analysis payload as CSV upload.
+- Records endpoint returns editable owner-facing records for the current analysis.
+- Record patch endpoint updates one item and returns the updated record.
+- Record delete endpoint removes one item and returns the remaining record set.
 - Simulation endpoint returns scenario metrics and updated action.
 - Explanation endpoint returns `live`, `mock`, or `fallback` explanation payload.
+
+## Canonical Input Flow
+- `src/stockwise_api/contracts.py` defines the canonical item contract shared by manual entry, CSV ingestion, and record updates.
+- `src/stockwise_api/services/validation.py` maps raw CSV headers into canonical field names, validates required and optional fields, and produces a canonical payload.
+- `src/stockwise_api/services/manual_input.py` normalizes canonical payloads into the internal analysis shape used by metrics and recommendations.
+- CSV uploads and manual analysis requests are treated as observation streams before scoring.
+- Observation streams collapse into one latest internal item per item identity before the recommendation engine runs.
+- Both entry modes must reach the recommendation engine through this same validation and normalization flow.
+- Required score-driving inputs are enforced at the canonical schema layer so the recommendation engine does not depend on fallback guesses for price or seasonality.
+
+## CSV Header Mapping
+- Owner-friendly CSV headers map directly to canonical fields.
+- Legacy dataset headers are supported through alias mapping.
+- `Daily_Usage` is treated as canonical `usage_value` with inferred `usage_period = daily`.
+- `Reorder_Level` is treated as canonical `manual_reorder_level`.
+- `Waste_Percentage` is treated as canonical `recent_waste_percentage`.
+- Either `perishability_level` or `recent_waste_percentage` must be present for each item as the waste signal used to derive `waste_percentage`.
+- Uploaded `Date` values drive dataset summary date ranges when present.
+
+## Manual Input Normalization
+- `usage_value + usage_period` are normalized into `daily_usage`
+- required `seasonal_factor` is passed through from validated input
+- required `price_per_unit` is passed through from validated input
+- default `category = "Uncategorized"`
+- default `supplier_name = "Unknown"`
+- default `reorder_level = max(daily_usage * lead_time_days, daily_usage)`
+- `waste_percentage` is inferred from `perishability_level`
+  - `low -> 1.5`
+  - `medium -> 3.0`
+  - `high -> 4.5`
+- if `recent_waste_percentage` is provided, it overrides the perishability-based default
+- if `manual_reorder_level` is provided, it overrides the system-generated reorder level
+- `subcategory` is preserved from canonical input when present, otherwise it falls back to `category` and then `"General"`
+- single-entry manual submissions still produce a valid latest item with `avg_usage_7d = daily_usage` and `trend_direction = stable`
+
+## Observation History Normalization
+- `normalize_item_history` first reuses the manual normalization path for every observation.
+- Observations with a source `item_id` are grouped by that ID.
+- Observations without a source `item_id` are grouped by `item_name`, `unit`, `category`, and `subcategory` so owner-friendly manual records can build history over time.
+- Each group is sorted by `date` and original observation order.
+- The latest observation in each group supplies the current snapshot used for scoring.
+- The grouped output preserves the first stable `item_id` for records, simulation, and explanation endpoints.
+- `avg_usage_7d` is computed from up to the seven most recent observations in the group.
+- `trend_direction` is computed from first-vs-latest usage in that recent window.
 
 ## Metrics and Thresholds
 - `days_of_cover`
@@ -28,6 +78,8 @@
 - `estimated_waste_cost`
 - `lead_time_demand`
 - `stock_gap_to_lead_demand`
+- `avg_usage_7d`
+- `trend_direction`
 - `reorder_urgency_score`
 - `waste_risk_score`
 
@@ -65,6 +117,11 @@
 - App factory: `stockwise_api.api.app:create_app`
 - Default provider mode: `mock`
 - Live provider fails fast at startup if `GLM_MODE=live` and `ZAI_API_KEY` is missing
+- CSV uploads preserve source `item_id` values when present and collapse repeated historical observations into one latest item per source item.
+- Manual analysis requests can include repeated dated entries for the same owner-facing item; those entries collapse into one latest item with trend-aware metrics.
+- `dataset_summary.row_count` reports source observations; `dataset_summary.item_count` reports grouped analyzed items.
+- Record edits and deletions trigger a full re-rank and KPI recomputation for the affected analysis
+- Record payloads expose `price_per_unit` and `seasonal_factor` as non-null score-driving inputs
 
 ## Environment Variables
 - `GLM_MODE=mock|live`
