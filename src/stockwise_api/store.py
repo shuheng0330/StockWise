@@ -34,3 +34,10 @@ class InMemoryAnalysisStore:
             if int(item["item_id"]) == int(item_id):
                 return item
         raise KeyError(f"Unknown item_id: {item_id}")
+
+    def update(self, analysis_id: str, dataset_summary: dict, kpi_summary: dict, items: list[dict]) -> AnalysisRecord:
+        record = self.get(analysis_id)
+        record.dataset_summary = dataset_summary
+        record.kpi_summary = kpi_summary
+        record.items = items
+        return record
