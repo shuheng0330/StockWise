@@ -169,7 +169,11 @@ def validate_inventory_csv(raw_bytes: bytes) -> tuple[list[dict], DatasetSummary
     if not any(column in canonical_headers for column in WASTE_SIGNAL_FIELDS):
         raise ValidationError("CSV is missing required waste-signal column: provide perishability_level or recent_waste_percentage.")
 
-<<<<<<< HEAD
+    validated_rows = []
+    for row in rows:
+        payload = _canonicalize_csv_row(row)
+        validated_rows.append(validate_manual_item_payload(payload))
+
     normalized = dataframe[REQUIRED_COLUMNS].copy()
 
     for column in STRING_COLUMNS:
@@ -196,19 +200,13 @@ def validate_inventory_csv(raw_bytes: bytes) -> tuple[list[dict], DatasetSummary
         raise ValidationError("CSV contains invalid Item_ID values.")
     normalized["Item_ID"] = normalized["Item_ID"].astype(int)
     normalized["Lead_Time"] = normalized["Lead_Time"].astype(int)
-=======
-    validated_rows = []
-    for row in rows:
-        payload = _canonicalize_csv_row(row)
-        validated_rows.append(validate_manual_item_payload(payload))
->>>>>>> 066dd37 (feat: add contracts and manual input validation updates)
 
     summary = DatasetSummary(
         row_count=int(len(validated_rows)),
         item_count=int(len(validated_rows)),
         date_range=_summarize_date_range(validated_rows),
     )
-<<<<<<< HEAD
+    return validated_rows, summary
     return normalized, summary
 
 
@@ -254,6 +252,3 @@ def validate_manual_items(items: list[dict]) -> tuple[pd.DataFrame, DatasetSumma
         date_range=DateRangeSummary(start=today, end=today),
     )
     return dataframe, summary
-=======
-    return validated_rows, summary
->>>>>>> 066dd37 (feat: add contracts and manual input validation updates)
