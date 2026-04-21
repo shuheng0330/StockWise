@@ -20,7 +20,8 @@
     "clsx": "^2.0.0",
     "react-hot-toast": "^2.4.1",
     "recharts": "^2.10.0",
-    "lucide-react": "^0.292.0"
+    "lucide-react": "^0.292.0",
+    "@supabase/supabase-js": "^2.39.0"
   },
   "devDependencies": {
     "typescript": "^5.2.0",
