@@ -161,7 +161,7 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                         <NavItem
                             icon={<Settings className="w-5 h-5" />}
                             label="Settings"
-                            disabled={true}
+                            href="/settings"
                             active={activeSection === 'settings'}
                         />
                     </div>
