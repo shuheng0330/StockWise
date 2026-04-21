@@ -30,7 +30,7 @@ from stockwise_api.services.simulation import simulate_item_quantity
 from stockwise_api.services.validation import (
     ValidationError,
     validate_inventory_csv,
-    validate_manual_items,
+    
 )
 from stockwise_api.store import InMemoryAnalysisStore
 
@@ -260,3 +260,4 @@ def create_app(glm_provider=None) -> FastAPI:
         return _safe_error(exc.status_code, "request_error", message, details=details)
 
     return app
+
