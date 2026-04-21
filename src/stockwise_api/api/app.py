@@ -88,48 +88,10 @@ def _save_analysis(store, items: list[dict], dataset_summary: dict, analysis_id:
     return analysis_id
 
 
-def _analysis_payload(store, analysis_id: str) -> dict:
-    record = store.get(analysis_id)
-    return {
-        "analysis_id": analysis_id,
-        "dataset_summary": record.dataset_summary,
-        "kpi_summary": record.kpi_summary,
-        "items": [_strip_internal_fields(item) for item in record.items],
-    }
-
-
-def _records_payload(store, analysis_id: str) -> dict:
-    record = store.get(analysis_id)
-    return {
-        "analysis_id": analysis_id,
-        "dataset_summary": record.dataset_summary,
-        "kpi_summary": record.kpi_summary,
-        "items": [item_to_record_view(item) for item in record.items],
-    }
-
-
-def _date_range_from_manual_items(items: list[dict]) -> dict:
-    today = date.today().isoformat()
-    dates = sorted(str(item.get("date") or today) for item in items)
-    return {
-        "start": dates[0] if dates else today,
-        "end": dates[-1] if dates else today,
-    }
-
-
-def _save_analysis(store, items: list[dict], dataset_summary: dict, analysis_id: str | None = None) -> str:
-    ranked_items = build_ranked_analysis(items)
-    kpis = build_kpi_summary(ranked_items)
-    if analysis_id is None:
-        return store.create(dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items)
-    store.update(analysis_id=analysis_id, dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items)
-    return analysis_id
-
-
 def create_app(glm_provider=None) -> FastAPI:
     app = FastAPI(title="StockWise Backend", version="0.1.0")
 
-    # Add CORS middleware
+    # Add CORS middleware (from shun branch - required for frontend)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000"],
@@ -155,37 +117,15 @@ def create_app(glm_provider=None) -> FastAPI:
     ):
         return _safe_error(400, "explanation_validation_error", str(exc))
 
+    # GET endpoint added by teammate 2 (frontend needs this)
     @app.get("/api/v1/analyses/{analysis_id}", response_model=AnalysisResponse)
     async def get_analysis(analysis_id: str):
-        # 1. Try to fetch the analysis from your in-memory store
         analysis = app.state.store.get(analysis_id)
-
-        # 2. If it doesn't exist, throw the 404 error
         if not analysis:
             raise HTTPException(
                 status_code=404, detail=f"Analysis {analysis_id} not found."
             )
-
-        # 3. Format the response to match your schema
-        # We use the same _strip_internal_fields logic you used in the POST method
-        return {
-            "analysis_id": analysis_id,
-            "dataset_summary": analysis.dataset_summary,
-            "kpi_summary": analysis.kpi_summary,
-            "items": [_strip_internal_fields(item) for item in analysis.items],
-        }
-
-    @app.get("/api/v1/analyses/{analysis_id}/records")
-    async def get_analysis_records(analysis_id: str):
-        # 1. Fetch the analysis from the store
-        analysis = app.state.store.get(analysis_id)
-
-        if not analysis:
-            raise HTTPException(status_code=404, detail="Analysis records not found.")
-
-        # 2. Return the items list
-        # Ensure we use the same _strip_internal_fields logic to keep the data clean
-        return [_strip_internal_fields(item) for item in analysis.items]
+        return _analysis_payload(app.state.store, analysis_id)
 
     @app.post("/api/v1/analyses", response_model=AnalysisResponse)
     async def create_analysis(file: UploadFile = File(...)):
