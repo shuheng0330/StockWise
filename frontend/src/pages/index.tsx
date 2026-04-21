@@ -134,12 +134,12 @@ export default function EntryPage() {
               </p>
               <div className="bg-gray-50 P-4 rounded border border-gray-200 overflow-x-auto">
                 <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words">
-                  item_name,current_stock,unit,usage_value,usage_period,lead_time_days,price_per_unit,seasonal_factor,perishability_level,category,subcategory,supplier_name,manual_reorder_level,recent_waste_percentage
+                  Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage
                 </pre>
               </div>
               <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <p className="text-gray-600 text-sm">
-                  * Required fields: item_name, current_stock, unit, usage_value, usage_period, lead_time_days, price_per_unit, seasonal_factor, and at least one waste signal (perishability_level or recent_waste_percentage)
+                  * All 14 columns are required. Date should be in YYYY-MM-DD format. Numeric fields must contain valid numbers.
                 </p>
               </div>
               <div className="mt-4"></div>

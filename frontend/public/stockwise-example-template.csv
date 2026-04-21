@@ -1,2 +1,2 @@
-item_name,current_stock,unit,usage_value,usage_period,lead_time_days,price_per_unit,seasonal_factor,perishability_level,category,subcategory,supplier_name,manual_reorder_level,recent_waste_percentage
-Sample Item,100,pcs,50,monthly,7,2.50,1.0,3,Beverages,Tea,Acme Supplies,20,5.0
+Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage
+2025-06-10,1,Sample Item,Beverages,Tea,pcs,100,20,2,7,2.50,Acme Supplies,1.0,5.0
