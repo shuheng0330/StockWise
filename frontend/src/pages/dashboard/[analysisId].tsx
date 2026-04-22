@@ -272,7 +272,7 @@ export default function Dashboard() {
                     </td>
                     <td className="px-6 py-4">
                       <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
-                        {item.recommended_action}
+                        {item.recommended_action.replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">

@@ -34,7 +34,9 @@ class ApiClient {
   }
 
   async createManualAnalysis(items: ManualItemInput[]): Promise<AnalysisResponse> {
-    const response = await this.client.post('/api/v1/manual-analyses', items);
+    // Backend expects an object with `items: [...]` not a bare array
+    const payload = { items };
+    const response = await this.client.post('/api/v1/manual-analyses', payload);
     return response.data;
   }
 

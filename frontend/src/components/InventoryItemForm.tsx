@@ -48,30 +48,51 @@ export function InventoryItemForm({
     const newErrors: Record<string, string> = {};
 
     items.forEach((item, index) => {
-      if (!item.item_name.trim()) {
-        newErrors[`${index}-item_name`] = 'Item name is required';
+      // Required field validations
+      if (!item.item_name || !item.item_name.trim()) {
+        newErrors[`${index}-item_name`] = 'Item name is required and cannot be blank';
       }
-      if (item.current_stock < 0) {
-        newErrors[`${index}-current_stock`] = 'Stock must be >= 0';
+      if (item.current_stock < 0 || isNaN(item.current_stock)) {
+        newErrors[`${index}-current_stock`] = 'Current stock must be a number >= 0';
       }
-      if (!item.unit.trim()) {
-        newErrors[`${index}-unit`] = 'Unit is required';
+      if (!item.unit || !item.unit.trim()) {
+        newErrors[`${index}-unit`] = 'Unit is required and cannot be blank';
       }
-      if (item.usage_value <= 0) {
-        newErrors[`${index}-usage_value`] = 'Usage value must be > 0';
+      if (item.usage_value <= 0 || isNaN(item.usage_value)) {
+        newErrors[`${index}-usage_value`] = 'Usage value must be a number > 0';
       }
-      if (item.lead_time_days <= 0) {
-        newErrors[`${index}-lead_time_days`] = 'Lead time must be > 0';
+      if (!item.usage_period || !['daily', 'weekly'].includes(item.usage_period)) {
+        newErrors[`${index}-usage_period`] = 'Usage period must be either daily or weekly';
       }
-      if (item.price_per_unit < 0) {
-        newErrors[`${index}-price_per_unit`] = 'Price must be >= 0';
+      if (item.lead_time_days <= 0 || !Number.isInteger(item.lead_time_days) || isNaN(item.lead_time_days)) {
+        newErrors[`${index}-lead_time_days`] = 'Lead time must be a whole number > 0';
       }
-      if (item.seasonal_factor < 0) {
-        newErrors[`${index}-seasonal_factor`] = 'Seasonal factor must be >= 0';
+      if (item.price_per_unit < 0 || isNaN(item.price_per_unit)) {
+        newErrors[`${index}-price_per_unit`] = 'Price per unit must be a number >= 0';
       }
-      // Check waste signal
+      if (item.seasonal_factor < 0 || isNaN(item.seasonal_factor)) {
+        newErrors[`${index}-seasonal_factor`] = 'Seasonal factor must be a number >= 0';
+      }
+
+      // Waste signal validation
       if (!item.perishability_level && !item.recent_waste_percentage) {
         newErrors[`${index}-waste`] = 'Please provide either perishability level or waste percentage';
+      } else {
+        // Validate perishability level if provided
+        if (item.perishability_level && !['low', 'medium', 'high'].includes(item.perishability_level)) {
+          newErrors[`${index}-perishability_level`] = 'Perishability level must be low, medium, or high';
+        }
+        // Validate waste percentage if provided
+        if (item.recent_waste_percentage !== undefined && item.recent_waste_percentage !== null) {
+          if (item.recent_waste_percentage < 0 || item.recent_waste_percentage > 100 || isNaN(item.recent_waste_percentage)) {
+            newErrors[`${index}-recent_waste_percentage`] = 'Waste percentage must be a number between 0 and 100';
+          }
+        }
+      }
+
+      // Optional field validations
+      if (item.manual_reorder_level !== undefined && item.manual_reorder_level !== null && (item.manual_reorder_level < 0 || isNaN(item.manual_reorder_level))) {
+        newErrors[`${index}-manual_reorder_level`] = 'Manual reorder level must be a number >= 0';
       }
     });
 
@@ -186,8 +207,9 @@ export function InventoryItemForm({
               label="Lead Time (days) *"
               type="number"
               min="1"
+              step="1"
               value={item.lead_time_days}
-              onChange={(e) => handleItemChange(index, 'lead_time_days', parseFloat(e.target.value) || 1)}
+              onChange={(e) => handleItemChange(index, 'lead_time_days', parseInt(e.target.value) || 1)}
               error={errors[`${index}-lead_time_days`]}
             />
             <Input
@@ -201,14 +223,16 @@ export function InventoryItemForm({
             />
             <Select
               label="Seasonal Factor *"
-              value={item.seasonal_factor.toString()}
-              onChange={(e) => handleItemChange(index, 'seasonal_factor', parseFloat(e.target.value))}
+              value={String(item.seasonal_factor)}
+              onChange={(e) => handleItemChange(index, 'seasonal_factor', parseFloat(e.target.value) || 0)}
               options={[
-                { value: '0.8', label: 'Low demand (0.8)' },
-                { value: '1.0', label: 'Normal (1.0)' },
-                { value: '1.2', label: 'Busy (1.2)' },
-                { value: '1.4', label: 'Peak (1.4)' },
+                { value: '0.8', label: '0.8 — lower demand' },
+                { value: '1.0', label: '1.0 — normal' },
+                { value: '1.1', label: '1.1 — slightly higher' },
+                { value: '1.2', label: '1.2 — seasonal peak' },
+                { value: '1.5', label: '1.5 — very high' },
               ]}
+              error={errors[`${index}-seasonal_factor`]}
             />
           </div>
 
@@ -219,10 +243,11 @@ export function InventoryItemForm({
                 label="Perishability Level"
                 value={item.perishability_level || ''}
                 onChange={(e) => handleItemChange(index, 'perishability_level', e.target.value as PerishabilityLevel)}
+                error={errors[`${index}-perishability_level`]}
                 options={[
-                  { value: 'Low', label: 'Low - Dry/canned goods' },
-                  { value: 'Medium', label: 'Medium - Chilled goods' },
-                  { value: 'High', label: 'High - Fresh produce/dairy' },
+                  { value: 'low', label: 'Low - Dry/canned goods' },
+                  { value: 'medium', label: 'Medium - Chilled goods' },
+                  { value: 'high', label: 'High - Fresh produce/dairy' },
                 ]}
               />
               <Input
@@ -231,8 +256,9 @@ export function InventoryItemForm({
                 step="0.1"
                 min="0"
                 max="100"
-                value={item.recent_waste_percentage || 0}
-                onChange={(e) => handleItemChange(index, 'recent_waste_percentage', parseFloat(e.target.value) || 0)}
+                value={item.recent_waste_percentage || ''}
+                onChange={(e) => handleItemChange(index, 'recent_waste_percentage', parseFloat(e.target.value) || undefined)}
+                error={errors[`${index}-recent_waste_percentage`]}
               />
             </div>
             {errors[`${index}-waste`] && (
@@ -265,8 +291,9 @@ export function InventoryItemForm({
                 label="Manual Reorder Level"
                 type="number"
                 min="0"
-                value={item.manual_reorder_level || 0}
-                onChange={(e) => handleItemChange(index, 'manual_reorder_level', parseFloat(e.target.value) || 0)}
+                value={item.manual_reorder_level || ''}
+                onChange={(e) => handleItemChange(index, 'manual_reorder_level', parseFloat(e.target.value) || undefined)}
+                error={errors[`${index}-manual_reorder_level`]}
               />
             </div>
           </div>
@@ -278,9 +305,14 @@ export function InventoryItemForm({
       </Button>
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <p className="text-blue-900 text-sm mb-2">
+          <strong>Required fields:</strong> All fields marked with * must be filled correctly.
+        </p>
+        <p className="text-blue-900 text-sm mb-2">
+          <strong>Waste signal:</strong> You must provide either perishability level or recent waste percentage.
+        </p>
         <p className="text-blue-900 text-sm">
-          <strong>Score-driving fields:</strong> The following fields directly affect recommendations:
-          usage value, lead time, seasonal factor, waste signal, and current stock.
+          <strong>Score-driving fields:</strong> Usage value, lead time, seasonal factor, waste signal, and current stock directly affect recommendations.
         </p>
       </div>
 
