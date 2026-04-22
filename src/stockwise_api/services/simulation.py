@@ -1,6 +1,19 @@
 from stockwise_api.services.recommendations import _classify_action, _compute_scores
 
 
+def _score_context_for_item(item: dict) -> dict:
+    existing_context = item.get("_score_context")
+    if existing_context:
+        return existing_context
+
+    return {
+        "max_daily_usage": item["daily_usage"],
+        "max_lead_time": item["lead_time"],
+        "max_waste_percentage": item["waste_percentage"],
+        "max_inventory_value": item["inventory_value"],
+    }
+
+
 def _risk_change(current_item: dict, simulated_item: dict) -> str:
     current_urgency = current_item["reorder_urgency_score"]
     current_waste = current_item["waste_risk_score"]
@@ -34,7 +47,7 @@ def simulate_item_quantity(item: dict, simulated_order_qty: float) -> dict:
         "estimated_waste_cost": simulated_estimated_waste_cost,
         "stock_gap_to_lead_demand": simulated_stock_gap_to_lead_demand,
     }
-    score_context = item["_score_context"]
+    score_context = _score_context_for_item(item)
     reorder_urgency_score, waste_risk_score = _compute_scores(simulated_item, score_context)
     recommended_action = _classify_action(simulated_item, reorder_urgency_score, waste_risk_score)
 

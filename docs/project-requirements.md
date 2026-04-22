@@ -6,7 +6,8 @@
 - Inventory records review/edit/delete flow for entered or uploaded items.
 - Stable API contracts for frontend integration.
 - Mock Z.AI provider until the real `ZAI_API_KEY` is available.
-- In-memory analysis storage keyed by `analysis_id` for hackathon MVP speed.
+- Supabase persistence for source inventory observations, suppliers, items, and CSV import batches.
+- In-memory analysis storage keyed by `analysis_id` remains the fast response cache for the current hackathon API flow.
 
 ## Owned Backend Responsibilities
 - CSV validation layer
@@ -28,6 +29,7 @@
 ## Canonical Input Contract
 - CSV upload and manual entry now converge into one canonical item contract before normalization and scoring.
 - CSV rows and manual daily entries are treated as inventory observations.
+- Source observations should be persisted before history collapse so uploaded datasets and manual daily entries remain reconstructable.
 - Analysis output collapses observations by item identity and returns one latest ranked item per item.
 - Recommendation scores must be derived only from normalized canonical fields, not from per-entry-mode parsing rules.
 - Record edits also reuse the same owner-facing field set so post-upload changes stay aligned with scoring inputs.
@@ -75,6 +77,19 @@
 - `perishability_level` should be presented as a guided dropdown unless the user provides `recent_waste_percentage`.
 - `price_per_unit` should be required with helper text that an estimate is acceptable.
 - UI copy should explain that these fields directly affect the recommendation score.
+- Manual analysis requests must post `{ "items": [...] }` to `POST /api/v1/manual-analyses`.
+
+## Supabase Persistence Contract
+- CSV uploads create an `import_batches` row with the uploaded filename, file type, source row count, success count, failure count, and final status.
+- CSV uploads insert every validated source row into `inventory_records` with `input_source = import` and the related `import_batch_id`.
+- Manual entries insert every submitted source row into `inventory_records` with `input_source = manual` and `import_batch_id = null`.
+- `record_date` must come from the canonical `date` value, defaulting to the current day only when the user did not provide a date.
+- `items` are matched by owner-facing identity, not by name only: `item_name`, `unit`, `category`, `subcategory`, and supplier identity.
+- `suppliers` are created or reused by `supplier_name` when a real supplier name is provided. Missing or normalized `Unknown` suppliers leave `supplier_id = null`.
+- When Supabase persistence is enabled, `analysis_runs.analysis_id` is the API `analysis_id` returned to the frontend.
+- `analysis_item_results` stores point-in-time recommendation snapshots for each ranked item in an analysis.
+- `GET /api/v1/analyses/{analysis_id}` should read from in-memory cache first and fall back to Supabase snapshot tables when needed.
+- Supabase persistence failures should not break deterministic analysis responses during the MVP.
 
 ## Current Output Shape
 - Analysis upload returns:

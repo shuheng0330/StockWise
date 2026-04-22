@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { InventoryItem } from '@/types';
+import { InventoryItem, SimulationResponse } from '@/types';
 import { Button, Input } from './common';
 
 interface ItemSimulationProps {
@@ -11,7 +11,7 @@ interface ItemSimulationProps {
 
 export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimulationProps) {
   const [simQty, setSimQty] = useState<number>(item.reorder_level);
-  const [simulationResult, setSimulationResult] = useState<any>(null);
+  const [simulationResult, setSimulationResult] = useState<SimulationResponse | null>(null);
   const [error, setError] = useState<string>('');
 
   const handleSimulate = async () => {
@@ -36,6 +36,19 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
         return 'text-green-600 bg-green-50';
       default:
         return 'text-gray-600 bg-gray-50';
+    }
+  };
+
+  const getRiskChangeLabel = (riskChange: SimulationResponse['simulated_risk_change']) => {
+    switch (riskChange) {
+      case 'lower_shortage_risk':
+        return 'Lower shortage risk';
+      case 'lower_waste_risk':
+        return 'Lower waste risk';
+      case 'higher_waste_risk':
+        return 'Higher waste risk';
+      case 'minimal_change':
+        return 'Minimal change';
     }
   };
 
@@ -176,7 +189,7 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
             <strong>New Recommendation:</strong> {simulationResult.recommended_action}
           </div>
           <div className="mt-3 text-sm text-gray-600">
-            <strong>Risk Change:</strong> {simulationResult.simulated_risk_change > 0 ? '+' : ''}{simulationResult.simulated_risk_change.toFixed(2)}%
+            <strong>Risk Change:</strong> {getRiskChangeLabel(simulationResult.simulated_risk_change)}
           </div>
         </div>
       )}

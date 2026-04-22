@@ -14,7 +14,7 @@ export default function RecordsPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<ManualItemInput>>({});
 
   useEffect(() => {
@@ -62,7 +62,7 @@ export default function RecordsPage() {
     }
   };
 
-  const handleDelete = async (itemId: string) => {
+  const handleDelete = async (itemId: number) => {
     if (items.length === 1) {
       toast.error('Cannot delete the final remaining item');
       return;

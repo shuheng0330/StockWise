@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
 import pytest
+import time
 
 from stockwise_api.api.app import create_app
 from stockwise_api.services.glm import MockZAIProvider
+from stockwise_api.store import AnalysisRecord
 
 
 OWNER_CSV = (
@@ -77,6 +79,108 @@ def test_upload_endpoint_collapses_historical_csv_to_latest_item_metrics():
     assert paneer["trend_direction"] == "up"
 
 
+def test_upload_endpoint_persists_historical_source_rows_to_supabase_store():
+    class CapturingSupabaseStore:
+        def __init__(self):
+            self.calls = []
+
+        def persist_observations(self, observations, **kwargs):
+            self.calls.append((observations, kwargs))
+            return {"import_batch_id": "import-batch-1", "successful_rows": len(observations), "failed_rows": 0}
+
+        def create_analysis_snapshot(self, **kwargs):
+            return "11111111-1111-1111-1111-111111111111"
+
+    historical_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-06-10,1,Paneer,Dairy,Cheese,kg,12,8,2,3,450,Supplier A,1.1,4.0\n"
+        "2025-06-11,1,Paneer,Dairy,Cheese,kg,9,8,3,3,450,Supplier A,1.1,4.0\n"
+        "2025-06-12,1,Paneer,Dairy,Cheese,kg,5,8,4,3,450,Supplier A,1.1,4.0\n"
+        "2025-06-12,2,Rice,Grain,Staple,kg,20,6,2,2,70,Supplier B,1.0,1.5\n"
+    ).encode()
+    supabase_store = CapturingSupabaseStore()
+    client = TestClient(create_app(supabase_store=supabase_store))
+
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("historical_inventory.csv", historical_csv, "text/csv")},
+    )
+
+    assert response.status_code == 200
+    observations, kwargs = supabase_store.calls[0]
+    assert len(observations) == 4
+    assert kwargs["source_type"] == "import"
+    assert kwargs["file_name"] == "historical_inventory.csv"
+    assert observations[0]["date"] == "2025-06-10"
+    assert observations[2]["date"] == "2025-06-12"
+
+
+def test_upload_endpoint_returns_supabase_analysis_snapshot_id_when_available():
+    class SnapshotSupabaseStore:
+        def persist_observations(self, observations, **kwargs):
+            return {
+                "import_batch_id": "import-batch-1",
+                "successful_rows": len(observations),
+                "failed_rows": 0,
+                "latest_records_by_history_identity": {
+                    "item:paneer|kg|dairy|": {
+                        "item_id": "supabase-paneer",
+                        "record_id": "record-paneer",
+                    }
+                },
+            }
+
+        def create_analysis_snapshot(self, **kwargs):
+            self.snapshot_kwargs = kwargs
+            return "22222222-2222-2222-2222-222222222222"
+
+    supabase_store = SnapshotSupabaseStore()
+    client = TestClient(create_app(supabase_store=supabase_store))
+
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_id"] == "22222222-2222-2222-2222-222222222222"
+    assert supabase_store.snapshot_kwargs["source_type"] == "import"
+    assert supabase_store.snapshot_kwargs["import_batch_id"] == "import-batch-1"
+    paneer = next(
+        item for item in supabase_store.snapshot_kwargs["ranked_items"]
+        if item["item_name"] == "Paneer"
+    )
+    assert paneer["_supabase_item_id"] == "supabase-paneer"
+    assert paneer["_latest_record_id"] == "record-paneer"
+
+
+def test_upload_endpoint_does_not_wait_forever_for_slow_supabase_persistence(monkeypatch):
+    class SlowSupabaseStore:
+        def persist_observations(self, observations, **kwargs):
+            time.sleep(1)
+            return {"import_batch_id": "slow-import", "successful_rows": len(observations), "failed_rows": 0}
+
+        def create_analysis_snapshot(self, **kwargs):
+            pytest.fail("snapshot persistence should be skipped after observation persistence times out")
+
+    monkeypatch.setenv("STOCKWISE_SUPABASE_OPERATION_TIMEOUT_SECONDS", "0.01")
+    client = TestClient(create_app(supabase_store=SlowSupabaseStore()))
+
+    start = time.perf_counter()
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    )
+    elapsed = time.perf_counter() - start
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
+    body = response.json()
+    assert body["analysis_id"] != "slow-import"
+    assert len(body["items"]) == 2
+
+
 def test_simulation_endpoint_returns_updated_scenario_metrics():
     client = TestClient(create_app())
     analysis = client.post(
@@ -135,6 +239,29 @@ def test_explanation_endpoint_falls_back_on_malformed_provider_response():
     body = response.json()
     assert body["source"] == "fallback"
     assert body["recommended_action"] == "BUY_LESS"
+
+
+def test_explanation_endpoint_uses_in_memory_item_when_supabase_store_is_unavailable():
+    class ExplodingSupabaseStore:
+        def persist_observations(self, observations, **kwargs):
+            pass
+
+        def get_item(self, analysis_id, item_id):
+            raise RuntimeError("network unavailable")
+
+    client = TestClient(create_app(supabase_store=ExplodingSupabaseStore()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1/explanation",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item_name"] == "Paneer"
 
 
 def test_create_app_fails_fast_when_live_mode_has_no_api_key(monkeypatch):
@@ -253,6 +380,351 @@ def test_manual_analysis_endpoint_collapses_repeated_daily_entries_into_history(
     assert paneer["daily_usage"] == 4.0
     assert paneer["avg_usage_7d"] == 3.0
     assert paneer["trend_direction"] == "up"
+
+
+def test_manual_analysis_endpoint_persists_manual_source_rows_to_supabase_store():
+    class CapturingSupabaseStore:
+        def __init__(self):
+            self.calls = []
+
+        def persist_observations(self, observations, **kwargs):
+            self.calls.append((observations, kwargs))
+            return {"import_batch_id": None, "successful_rows": len(observations), "failed_rows": 0}
+
+        def create_analysis_snapshot(self, **kwargs):
+            return "33333333-3333-3333-3333-333333333333"
+
+    supabase_store = CapturingSupabaseStore()
+    client = TestClient(create_app(supabase_store=supabase_store))
+    payload = {
+        "items": [
+            {
+                "date": "2025-06-10",
+                "item_name": "Paneer",
+                "current_stock": 12.0,
+                "unit": "kg",
+                "usage_value": 2.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "recent_waste_percentage": 4.0,
+            },
+            {
+                "date": "2025-06-11",
+                "item_name": "Paneer",
+                "current_stock": 9.0,
+                "unit": "kg",
+                "usage_value": 3.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "recent_waste_percentage": 4.0,
+            },
+        ]
+    }
+
+    response = client.post("/api/v1/manual-analyses", json=payload)
+
+    assert response.status_code == 200
+    observations, kwargs = supabase_store.calls[0]
+    assert len(observations) == 2
+    assert kwargs["source_type"] == "manual"
+    assert kwargs["file_name"] is None
+    assert observations[1]["date"] == "2025-06-11"
+
+
+def test_manual_analysis_endpoint_returns_supabase_analysis_snapshot_id_when_available():
+    class SnapshotSupabaseStore:
+        def persist_observations(self, observations, **kwargs):
+            return {"import_batch_id": None, "successful_rows": len(observations), "failed_rows": 0}
+
+        def create_analysis_snapshot(self, **kwargs):
+            self.snapshot_kwargs = kwargs
+            return "44444444-4444-4444-4444-444444444444"
+
+    supabase_store = SnapshotSupabaseStore()
+    client = TestClient(create_app(supabase_store=supabase_store))
+    payload = {
+        "items": [
+            {
+                "item_name": "Paneer",
+                "current_stock": 12.0,
+                "unit": "kg",
+                "usage_value": 14.0,
+                "usage_period": "weekly",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "perishability_level": "high",
+            }
+        ]
+    }
+
+    response = client.post("/api/v1/manual-analyses", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["analysis_id"] == "44444444-4444-4444-4444-444444444444"
+    assert supabase_store.snapshot_kwargs["source_type"] == "manual"
+    assert supabase_store.snapshot_kwargs["import_batch_id"] is None
+
+
+def test_get_analysis_falls_back_to_supabase_snapshot_when_memory_is_empty():
+    class ReadOnlySupabaseStore:
+        def get(self, analysis_id):
+            if analysis_id != "55555555-5555-5555-5555-555555555555":
+                raise KeyError(analysis_id)
+            return AnalysisRecord(
+                dataset_summary={
+                    "row_count": 1,
+                    "item_count": 1,
+                    "date_range": {"start": "2025-06-12", "end": "2025-06-12"},
+                },
+                kpi_summary={
+                    "item_count": 1,
+                    "restock_now_count": 1,
+                    "buy_less_count": 0,
+                    "high_waste_risk_count": 0,
+                    "inventory_value_at_risk": 0.0,
+                    "top_urgent_items": ["Paneer"],
+                    "top_waste_cost_items": ["Paneer"],
+                },
+                items=[
+                    {
+                        "item_id": 1,
+                        "date": "2025-06-12",
+                        "item_name": "Paneer",
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "unit": "kg",
+                        "supplier_name": "Supplier A",
+                        "current_stock": 5.0,
+                        "reorder_level": 8.0,
+                        "daily_usage": 4.0,
+                        "lead_time": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "waste_percentage": 4.0,
+                        "avg_usage_7d": 3.0,
+                        "trend_direction": "up",
+                        "days_of_cover": 1.25,
+                        "inventory_value": 2250.0,
+                        "estimated_waste_cost": 90.0,
+                        "lead_time_demand": 13.2,
+                        "stock_gap_to_lead_demand": -8.2,
+                        "reorder_urgency_score": 88,
+                        "waste_risk_score": 42,
+                        "recommended_action": "RESTOCK_NOW",
+                    }
+                ],
+            )
+
+    client = TestClient(create_app(supabase_store=ReadOnlySupabaseStore()))
+
+    response = client.get("/api/v1/analyses/55555555-5555-5555-5555-555555555555")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_id"] == "55555555-5555-5555-5555-555555555555"
+    assert body["items"][0]["item_name"] == "Paneer"
+
+
+def test_get_latest_analysis_falls_back_to_latest_supabase_snapshot_when_memory_is_empty():
+    class ReadOnlySupabaseStore:
+        def get_latest_analysis_id(self):
+            return "66666666-6666-6666-6666-666666666666"
+
+        def get(self, analysis_id):
+            if analysis_id != "66666666-6666-6666-6666-666666666666":
+                raise KeyError(analysis_id)
+            return AnalysisRecord(
+                dataset_summary={
+                    "row_count": 1,
+                    "item_count": 1,
+                    "date_range": {"start": "2025-06-12", "end": "2025-06-12"},
+                },
+                kpi_summary={
+                    "item_count": 1,
+                    "restock_now_count": 1,
+                    "buy_less_count": 0,
+                    "high_waste_risk_count": 0,
+                    "inventory_value_at_risk": 0.0,
+                    "top_urgent_items": ["Paneer"],
+                    "top_waste_cost_items": ["Paneer"],
+                },
+                items=[
+                    {
+                        "item_id": 1,
+                        "date": "2025-06-12",
+                        "item_name": "Paneer",
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "unit": "kg",
+                        "supplier_name": "Supplier A",
+                        "current_stock": 5.0,
+                        "reorder_level": 8.0,
+                        "daily_usage": 4.0,
+                        "lead_time": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "waste_percentage": 4.0,
+                        "avg_usage_7d": 3.0,
+                        "trend_direction": "up",
+                        "days_of_cover": 1.25,
+                        "inventory_value": 2250.0,
+                        "estimated_waste_cost": 90.0,
+                        "lead_time_demand": 13.2,
+                        "stock_gap_to_lead_demand": -8.2,
+                        "reorder_urgency_score": 88,
+                        "waste_risk_score": 42,
+                        "recommended_action": "RESTOCK_NOW",
+                    }
+                ],
+            )
+
+    client = TestClient(create_app(supabase_store=ReadOnlySupabaseStore()))
+
+    response = client.get("/api/v1/analyses/latest")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_id"] == "66666666-6666-6666-6666-666666666666"
+    assert body["items"][0]["item_name"] == "Paneer"
+
+
+def test_simulation_endpoint_falls_back_to_supabase_snapshot_when_memory_is_empty():
+    class ReadOnlySupabaseStore:
+        def get(self, analysis_id):
+            if analysis_id != "77777777-7777-7777-7777-777777777777":
+                raise KeyError(analysis_id)
+            return AnalysisRecord(
+                dataset_summary={
+                    "row_count": 1,
+                    "item_count": 1,
+                    "date_range": {"start": "2025-06-12", "end": "2025-06-12"},
+                },
+                kpi_summary={
+                    "item_count": 1,
+                    "restock_now_count": 1,
+                    "buy_less_count": 0,
+                    "high_waste_risk_count": 0,
+                    "inventory_value_at_risk": 0.0,
+                    "top_urgent_items": ["Paneer"],
+                    "top_waste_cost_items": ["Paneer"],
+                },
+                items=[
+                    {
+                        "item_id": 1,
+                        "date": "2025-06-12",
+                        "item_name": "Paneer",
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "unit": "kg",
+                        "supplier_name": "Supplier A",
+                        "current_stock": 5.0,
+                        "reorder_level": 8.0,
+                        "daily_usage": 4.0,
+                        "lead_time": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "waste_percentage": 4.0,
+                        "avg_usage_7d": 3.0,
+                        "trend_direction": "up",
+                        "days_of_cover": 1.25,
+                        "inventory_value": 2250.0,
+                        "estimated_waste_cost": 90.0,
+                        "lead_time_demand": 13.2,
+                        "stock_gap_to_lead_demand": -8.2,
+                        "reorder_urgency_score": 88,
+                        "waste_risk_score": 42,
+                        "recommended_action": "RESTOCK_NOW",
+                        "_score_context": {
+                            "max_daily_usage": 4.0,
+                            "max_lead_time": 3,
+                            "max_waste_percentage": 4.0,
+                            "max_inventory_value": 2250.0,
+                        },
+                    }
+                ],
+            )
+
+    client = TestClient(create_app(supabase_store=ReadOnlySupabaseStore()))
+
+    response = client.post(
+        "/api/v1/analyses/77777777-7777-7777-7777-777777777777/items/1/simulate",
+        json={"simulated_order_qty": 3.0},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item_id"] == 1
+
+
+def test_explanation_endpoint_falls_back_to_supabase_snapshot_when_memory_is_empty():
+    class ReadOnlySupabaseStore:
+        def get(self, analysis_id):
+            if analysis_id != "88888888-8888-8888-8888-888888888888":
+                raise KeyError(analysis_id)
+            return AnalysisRecord(
+                dataset_summary={
+                    "row_count": 1,
+                    "item_count": 1,
+                    "date_range": {"start": "2025-06-12", "end": "2025-06-12"},
+                },
+                kpi_summary={
+                    "item_count": 1,
+                    "restock_now_count": 1,
+                    "buy_less_count": 0,
+                    "high_waste_risk_count": 0,
+                    "inventory_value_at_risk": 0.0,
+                    "top_urgent_items": ["Paneer"],
+                    "top_waste_cost_items": ["Paneer"],
+                },
+                items=[
+                    {
+                        "item_id": 1,
+                        "date": "2025-06-12",
+                        "item_name": "Paneer",
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "unit": "kg",
+                        "supplier_name": "Supplier A",
+                        "current_stock": 5.0,
+                        "reorder_level": 8.0,
+                        "daily_usage": 4.0,
+                        "lead_time": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "waste_percentage": 4.0,
+                        "avg_usage_7d": 3.0,
+                        "trend_direction": "up",
+                        "days_of_cover": 1.25,
+                        "inventory_value": 2250.0,
+                        "estimated_waste_cost": 90.0,
+                        "lead_time_demand": 13.2,
+                        "stock_gap_to_lead_demand": -8.2,
+                        "reorder_urgency_score": 88,
+                        "waste_risk_score": 42,
+                        "recommended_action": "RESTOCK_NOW",
+                        "_score_context": {
+                            "max_daily_usage": 4.0,
+                            "max_lead_time": 3,
+                            "max_waste_percentage": 4.0,
+                            "max_inventory_value": 2250.0,
+                        },
+                    }
+                ],
+            )
+
+    client = TestClient(create_app(supabase_store=ReadOnlySupabaseStore()))
+
+    response = client.post(
+        "/api/v1/analyses/88888888-8888-8888-8888-888888888888/items/1/explanation",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item_name"] == "Paneer"
 
 
 def test_records_endpoint_returns_current_analysis_items():

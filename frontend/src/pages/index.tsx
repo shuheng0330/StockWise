@@ -6,6 +6,7 @@ import { Button, Alert, Card } from '@/components/common';
 import { InventoryItemForm } from '@/components/InventoryItemForm';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
+import { saveLatestAnalysisId } from '@/lib/analysisSession';
 import { ManualItemInput } from '@/types';
 import toast from 'react-hot-toast';
 
@@ -30,6 +31,7 @@ export default function EntryPage() {
 
     try {
       const response = await apiClient.uploadCsv(file);
+      saveLatestAnalysisId(response.analysis_id);
       toast.success('Analysis created successfully!');
       router.push(`/dashboard/${response.analysis_id}`);
     } catch (err: any) {
@@ -47,6 +49,7 @@ export default function EntryPage() {
 
     try {
       const response = await apiClient.createManualAnalysis(items);
+      saveLatestAnalysisId(response.analysis_id);
       toast.success('Analysis created successfully!');
       router.push(`/dashboard/${response.analysis_id}`);
     } catch (err: any) {

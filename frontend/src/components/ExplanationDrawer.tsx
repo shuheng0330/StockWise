@@ -37,9 +37,9 @@ export function ExplanationDrawer({ explanation, onClose }: ExplanationDrawerPro
   };
 
   const PriorityIcon = {
-    high: <AlertCircle className="w-5 h-5 text-red-600" />,
-    medium: <AlertTriangle className="w-5 h-5 text-yellow-600" />,
-    low: <Info className="w-5 h-5 text-blue-600" />,
+    HIGH: <AlertCircle className="w-5 h-5 text-red-600" />,
+    MEDIUM: <AlertTriangle className="w-5 h-5 text-yellow-600" />,
+    LOW: <Info className="w-5 h-5 text-blue-600" />,
   };
 
   return (
@@ -59,7 +59,7 @@ export function ExplanationDrawer({ explanation, onClose }: ExplanationDrawerPro
               <div className="flex items-center gap-1">
                 {PriorityIcon[explanation.priority_level]}
                 <span className="text-sm font-medium capitalize text-gray-700">
-                  {explanation.priority_level} Priority
+                  {explanation.priority_level.toLowerCase()} Priority
                 </span>
               </div>
             </div>
