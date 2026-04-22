@@ -96,7 +96,7 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
       {/* Simulation Input */}
       <div className="border rounded-lg p-4">
         <h4 className="font-semibold text-gray-900 mb-3">Test a Reorder Quantity</h4>
-        <div className="flex gap-3 items-end">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
           <div className="flex-1">
             <Input
               label={`Proposed Reorder Quantity (${item.unit})`}
@@ -111,6 +111,7 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
             variant="primary"
             onClick={handleSimulate}
             loading={isLoading}
+            className="w-full sm:w-auto"
           >
             Simulate
           </Button>

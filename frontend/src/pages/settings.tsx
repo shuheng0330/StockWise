@@ -68,18 +68,18 @@ export default function SettingsPage() {
             <NavigationBar activeSection="settings" onFeatureSelect={() => null} />
 
             <main className="max-w-6xl mx-auto p-4 md:p-8">
-                <div className="mb-8">
-                    <h1 className="text-4xl font-bold text-slate-900">Settings</h1>
-                    <p className="mt-3 text-gray-600 max-w-2xl">
+                <div className="mb-6 md:mb-8">
+                    <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-slate-900">Settings</h1>
+                    <p className="mt-3 text-sm sm:text-base text-gray-600 max-w-2xl">
                         Configure StockWise behavior for analysis defaults, export preferences, and display settings.
                         These preferences are stored locally in your browser and help streamline future workflows.
                     </p>
                 </div>
 
                 <div className="grid gap-6">
-                    <Card className="p-6">
+                    <Card className="p-4 sm:p-6">
                         <div className="flex flex-col gap-3">
-                            <h2 className="text-2xl font-semibold text-slate-900">Analysis Preferences</h2>
+                            <h2 className="text-xl sm:text-2xl font-semibold text-slate-900">Analysis Preferences</h2>
                             <p className="text-sm text-gray-600">
                                 Choose default behaviors for newly created inventory analyses.
                             </p>
@@ -108,9 +108,9 @@ export default function SettingsPage() {
                         </div>
                     </Card>
 
-                    <Card className="p-6">
+                    <Card className="p-4 sm:p-6">
                         <div className="flex flex-col gap-3">
-                            <h2 className="text-2xl font-semibold text-slate-900">Display Preferences</h2>
+                            <h2 className="text-xl sm:text-2xl font-semibold text-slate-900">Display Preferences</h2>
                             <p className="text-sm text-gray-600">
                                 Adjust table density and on-screen alerts to match your reporting style.
                             </p>
@@ -162,9 +162,9 @@ export default function SettingsPage() {
                         </div>
                     </Card>
 
-                    <Card className="p-6">
+                    <Card className="p-4 sm:p-6">
                         <div className="flex flex-col gap-3">
-                            <h2 className="text-2xl font-semibold text-slate-900">Data & Export</h2>
+                            <h2 className="text-xl sm:text-2xl font-semibold text-slate-900">Data & Export</h2>
                             <p className="text-sm text-gray-600">Control how inventory reports are generated and exported from StockWise.</p>
 
                             <div className="grid gap-4 md:grid-cols-2">
@@ -190,7 +190,7 @@ export default function SettingsPage() {
                     )}
 
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="space-x-3">
+                        <div className="flex flex-wrap gap-3">
                             <Button variant="primary" onClick={handleSave}>
                                 Save Settings
                             </Button>

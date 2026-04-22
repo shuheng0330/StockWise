@@ -43,13 +43,13 @@ export function ExplanationDrawer({ explanation, onClose }: ExplanationDrawerPro
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end md:items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end md:items-center justify-center p-2 sm:p-4">
+      <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="border-b p-6 flex justify-between items-start gap-4">
-          <div className="flex-1">
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">{explanation.item_name}</h2>
-            <div className="flex gap-3 flex-wrap items-center">
+        <div className="border-b p-4 sm:p-6 flex justify-between items-start gap-3 sm:gap-4">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 break-words">{explanation.item_name}</h2>
+            <div className="flex gap-2 sm:gap-3 flex-wrap items-center">
               <span className={`px-3 py-1 rounded-full text-sm font-medium ${getActionColor(explanation.recommended_action)} border`}>
                 {explanation.recommended_action}
               </span>
@@ -73,7 +73,7 @@ export function ExplanationDrawer({ explanation, onClose }: ExplanationDrawerPro
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
           {/* Warning Flag */}
           {explanation.warning_flag && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex gap-3">
@@ -121,7 +121,7 @@ export function ExplanationDrawer({ explanation, onClose }: ExplanationDrawerPro
         </div>
 
         {/* Footer */}
-        <div className="border-t p-6 bg-gray-50 flex justify-end">
+        <div className="border-t p-4 sm:p-6 bg-gray-50 flex justify-end">
           <button
             onClick={onClose}
             className="px-4 py-2 bg-gray-300 text-gray-900 rounded-lg hover:bg-gray-400 font-medium"

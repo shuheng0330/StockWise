@@ -68,9 +68,9 @@ export default function EntryPage() {
 
       <div className="max-w-4xl mx-auto p-4 md:p-8">
         {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">StockWise</h1>
-          <p className="text-xl text-gray-600">Intelligent Inventory Analysis & Recommendations</p>
+        <div className="text-center mb-8 md:mb-12">
+          <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-2">StockWise</h1>
+          <p className="text-base sm:text-xl text-gray-600">Intelligent Inventory Analysis & Recommendations</p>
         </div>
 
         {/* Mode Selection or Selected Mode */}
@@ -82,9 +82,9 @@ export default function EntryPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
               {/* CSV Upload Option */}
-              <Card className="p-8 cursor-pointer hover:shadow-lg transition">
+              <Card className="p-6 md:p-8 cursor-pointer hover:shadow-lg transition">
                 <button
                   onClick={() => setMode('upload')}
                   className="w-full text-left"
@@ -105,7 +105,7 @@ export default function EntryPage() {
               </Card>
 
               {/* Manual Entry Option */}
-              <Card className="p-8 cursor-pointer hover:shadow-lg transition">
+              <Card className="p-6 md:p-8 cursor-pointer hover:shadow-lg transition">
                 <button
                   onClick={() => setMode('manual')}
                   className="w-full text-left"
@@ -127,7 +127,7 @@ export default function EntryPage() {
             </div>
 
             {/* CSV Format Help */}
-            <div className="mt-12 bg-white rounded-lg p-6 shadow">
+            <div className="mt-8 md:mt-12 bg-white rounded-lg p-4 md:p-6 shadow">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">CSV Format Requirements</h3>
               <p className="text-gray-600 mb-4">
                 Your CSV file should include the following columns:
@@ -165,9 +165,9 @@ export default function EntryPage() {
               <Alert type="error" message={error} onClose={() => setError('')} />
             )}
 
-            <Card className="p-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-4">Upload CSV</h2>
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
+            <Card className="p-4 sm:p-6 md:p-8">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4">Upload CSV</h2>
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 sm:p-8 text-center">
                 <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                 <p className="text-gray-900 font-medium mb-2">Drag and drop your CSV file here</p>
                 <p className="text-gray-600 text-sm mb-4">or</p>
@@ -203,8 +203,8 @@ export default function EntryPage() {
               <Alert type="error" message={error} onClose={() => setError('')} />
             )}
 
-            <Card className="p-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Manual Inventory Entry</h2>
+            <Card className="p-4 sm:p-6 md:p-8">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-6">Manual Inventory Entry</h2>
               <InventoryItemForm
                 onSubmit={handleManualSubmit}
                 isLoading={isLoading}

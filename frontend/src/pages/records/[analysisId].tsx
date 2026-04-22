@@ -102,13 +102,13 @@ export default function RecordsPage() {
 
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 md:px-8 py-6">
-          <div className="flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 md:px-8 py-4 md:py-6">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Review Records</h1>
-              <p className="text-gray-600 mt-1">{items.length} items</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Review Records</h1>
+              <p className="text-sm sm:text-base text-gray-600 mt-1">{items.length} items</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Link href={`/dashboard/${analysisId}`}>
                 <Button variant="secondary">Back to Dashboard</Button>
               </Link>
@@ -118,7 +118,7 @@ export default function RecordsPage() {
       </div>
 
       {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
+      <div className="max-w-7xl mx-auto px-4 md:px-8 py-6 md:py-8">
         {error && (
           <Alert type="error" message={error} onClose={() => setError('')} className="mb-6" />
         )}
@@ -201,7 +201,7 @@ export default function RecordsPage() {
                           </span>
                         </td>
                         <td className="px-6 py-4 text-sm">
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
                             <Button
                               variant="secondary"
                               size="sm"

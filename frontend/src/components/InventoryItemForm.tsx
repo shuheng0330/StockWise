@@ -22,7 +22,7 @@ export function InventoryItemForm({
       usage_period: 'daily',
       lead_time_days: 1,
       price_per_unit: 0,
-      seasonal_factor: 1.0,
+      seasonal_factor: 0,
     },
   ]);
 
@@ -69,7 +69,11 @@ export function InventoryItemForm({
       if (item.seasonal_factor < 0) {
         newErrors[`${index}-seasonal_factor`] = 'Seasonal factor must be >= 0';
       }
-      // Check waste signal
+      if (item.seasonal_factor <= 0 || isNaN(item.seasonal_factor)) {
+        newErrors[`${index}-seasonal_factor`] = 'Please select a seasonal factor';
+      }
+
+      // Waste signal validation
       if (!item.perishability_level && !item.recent_waste_percentage) {
         newErrors[`${index}-waste`] = 'Please provide either perishability level or waste percentage';
       }
@@ -90,7 +94,7 @@ export function InventoryItemForm({
         usage_period: 'daily',
         lead_time_days: 1,
         price_per_unit: 0,
-        seasonal_factor: 1.0,
+        seasonal_factor: 0,
       },
     ]);
   };
@@ -116,10 +120,10 @@ export function InventoryItemForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       {items.map((item, index) => (
-        <div key={index} className="border rounded-lg p-6 bg-gray-50">
-          <div className="flex justify-between items-center mb-4">
+        <div key={index} className="border rounded-lg p-4 sm:p-6 bg-gray-50">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-4">
             <h3 className="text-lg font-semibold">Item {index + 1}</h3>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {items.length > 1 && (
                 <Button
                   type="button"
@@ -144,6 +148,7 @@ export function InventoryItemForm({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <Input
               label="Item Name *"
+              tooltip="The name of the product or material you want to track in inventory."
               placeholder="e.g., Fresh Milk"
               value={item.item_name}
               onChange={(e) => handleItemChange(index, 'item_name', e.target.value)}
@@ -151,6 +156,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Current Stock *"
+              tooltip="How much of this item you currently have on hand, measured in the chosen unit."
               type="number"
               min="0"
               value={item.current_stock}
@@ -159,6 +165,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Unit *"
+              tooltip="The unit of measurement for this item (e.g., kg, liter, pieces, boxes)."
               placeholder="e.g., liter, kg, pieces"
               value={item.unit}
               onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
@@ -166,6 +173,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Usage Value *"
+              tooltip="How much of this item you typically use over the chosen period (daily or weekly)."
               type="number"
               step="0.01"
               min="0.01"
@@ -175,6 +183,7 @@ export function InventoryItemForm({
             />
             <Select
               label="Usage Period *"
+              tooltip="Whether the usage value above is measured per day or per week."
               value={item.usage_period}
               onChange={(e) => handleItemChange(index, 'usage_period', e.target.value as UsagePeriod)}
               options={[
@@ -184,6 +193,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Lead Time (days) *"
+              tooltip="Number of days between placing an order with your supplier and receiving the stock."
               type="number"
               min="1"
               value={item.lead_time_days}
@@ -192,6 +202,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Price per Unit *"
+              tooltip="Cost of one unit of this item. Used to calculate inventory value and waste cost."
               type="number"
               step="0.01"
               min="0"
@@ -201,8 +212,9 @@ export function InventoryItemForm({
             />
             <Select
               label="Seasonal Factor *"
-              value={item.seasonal_factor.toString()}
-              onChange={(e) => handleItemChange(index, 'seasonal_factor', parseFloat(e.target.value))}
+              tooltip="Multiplier reflecting seasonal demand. 1.0 = normal, >1 = peak season, <1 = off-season."
+              value={item.seasonal_factor.toFixed(1)}
+              onChange={(e) => handleItemChange(index, 'seasonal_factor', parseFloat(e.target.value) || 0)}
               options={[
                 { value: '0.8', label: 'Low demand (0.8)' },
                 { value: '1.0', label: 'Normal (1.0)' },
@@ -217,6 +229,7 @@ export function InventoryItemForm({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Select
                 label="Perishability Level"
+                tooltip="How quickly this item spoils. Higher perishability raises the waste risk score."
                 value={item.perishability_level || ''}
                 onChange={(e) => handleItemChange(index, 'perishability_level', e.target.value as PerishabilityLevel)}
                 options={[
@@ -227,6 +240,7 @@ export function InventoryItemForm({
               />
               <Input
                 label="Recent Waste Percentage"
+                tooltip="Percentage of recent stock that was wasted (0–100). Used to estimate future waste cost."
                 type="number"
                 step="0.1"
                 min="0"
@@ -245,24 +259,28 @@ export function InventoryItemForm({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input
                 label="Category"
+                tooltip="Optional grouping for organizing items (e.g., Dairy, Produce, Beverages)."
                 placeholder="e.g., Dairy"
                 value={item.category || ''}
                 onChange={(e) => handleItemChange(index, 'category', e.target.value)}
               />
               <Input
                 label="Subcategory"
+                tooltip="Optional finer grouping under the category (e.g., Milk Products under Dairy)."
                 placeholder="e.g., Milk Products"
                 value={item.subcategory || ''}
                 onChange={(e) => handleItemChange(index, 'subcategory', e.target.value)}
               />
               <Input
                 label="Supplier Name"
+                tooltip="Optional name of the supplier providing this item."
                 placeholder="e.g., Local Farmer"
                 value={item.supplier_name || ''}
                 onChange={(e) => handleItemChange(index, 'supplier_name', e.target.value)}
               />
               <Input
                 label="Manual Reorder Level"
+                tooltip="Optional override for the auto-calculated reorder level. Leave blank to let StockWise calculate it."
                 type="number"
                 min="0"
                 value={item.manual_reorder_level || 0}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import {
     Home,
@@ -9,9 +9,11 @@ import {
     TrendingUp,
     MessageSquare,
     Database,
-    Settings
+    Settings,
+    Menu,
+    X,
+    ChevronDown
 } from 'lucide-react';
-import { Button } from '@/components/common';
 
 interface NavItemProps {
     icon: React.ReactNode;
@@ -20,10 +22,11 @@ interface NavItemProps {
     onClick?: () => void;
     disabled?: boolean;
     active?: boolean;
+    fullWidth?: boolean;
 }
 
-function NavItem({ icon, label, href, onClick, disabled, active }: NavItemProps) {
-    const baseClasses = "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors";
+function NavItem({ icon, label, href, onClick, disabled, active, fullWidth }: NavItemProps) {
+    const baseClasses = `flex items-center gap-2 px-3 lg:px-4 py-2 rounded-lg transition-colors text-sm lg:text-base ${fullWidth ? 'w-full' : ''}`;
     const stateClasses = disabled
         ? "text-gray-400 cursor-not-allowed"
         : active
@@ -67,19 +70,26 @@ interface NavigationBarProps {
 }
 
 export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSection }: NavigationBarProps) {
+    const [mobileOpen, setMobileOpen] = useState(false);
+    const [dataEntryOpen, setDataEntryOpen] = useState(false);
+
+    const closeMobile = () => {
+        setMobileOpen(false);
+        setDataEntryOpen(false);
+    };
+
     return (
-        <nav className="bg-white border-b border-gray-200 shadow-sm">
+        <nav className="bg-white border-b border-gray-200 shadow-sm relative">
             <div className="max-w-7xl mx-auto px-4 md:px-8">
                 <div className="flex items-center justify-between h-16">
                     {/* Logo/Brand */}
                     <div className="flex items-center gap-2">
-                        <BarChart3 className="w-8 h-8 text-blue-600" />
-                        <span className="text-xl font-bold text-gray-900">StockWise</span>
+                        <BarChart3 className="w-7 h-7 lg:w-8 lg:h-8 text-blue-600" />
+                        <span className="text-lg lg:text-xl font-bold text-gray-900">StockWise</span>
                     </div>
 
-                    {/* Navigation Items */}
-                    <div className="flex items-center gap-1">
-                        {/* Home/Data Entry */}
+                    {/* Desktop Navigation Items */}
+                    <div className="hidden lg:flex items-center gap-1">
                         <NavItem
                             icon={<Home className="w-5 h-5" />}
                             label="Home"
@@ -87,9 +97,9 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             active={activeSection === 'home'}
                         />
 
-                        {/* Data Entry Submenu */}
+                        {/* Data Entry Submenu (hover) */}
                         <div className="relative group">
-                            <button className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium">
+                            <button className="flex items-center gap-2 px-3 lg:px-4 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium text-sm lg:text-base">
                                 <Upload className="w-5 h-5" />
                                 Data Entry
                             </button>
@@ -113,7 +123,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             </div>
                         </div>
 
-                        {/* Analysis Dashboard */}
                         <NavItem
                             icon={<BarChart3 className="w-5 h-5" />}
                             label="Analysis"
@@ -122,7 +131,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             active={activeSection === 'dashboard'}
                         />
 
-                        {/* Records Management */}
                         <NavItem
                             icon={<FileCheck className="w-5 h-5" />}
                             label="Records"
@@ -131,7 +139,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             active={activeSection === 'records'}
                         />
 
-                        {/* Simulation */}
                         <NavItem
                             icon={<TrendingUp className="w-5 h-5" />}
                             label="Simulation"
@@ -140,7 +147,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             active={activeSection === 'simulation'}
                         />
 
-                        {/* AI Explanations */}
                         <NavItem
                             icon={<MessageSquare className="w-5 h-5" />}
                             label="Explanations"
@@ -149,7 +155,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             active={activeSection === 'explanation'}
                         />
 
-                        {/* Data Export */}
                         <NavItem
                             icon={<Database className="w-5 h-5" />}
                             label="Export"
@@ -157,7 +162,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             active={activeSection === 'export'}
                         />
 
-                        {/* Settings */}
                         <NavItem
                             icon={<Settings className="w-5 h-5" />}
                             label="Settings"
@@ -165,8 +169,119 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                             active={activeSection === 'settings'}
                         />
                     </div>
+
+                    {/* Mobile hamburger toggle */}
+                    <button
+                        type="button"
+                        aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                        aria-expanded={mobileOpen}
+                        onClick={() => setMobileOpen(!mobileOpen)}
+                        className="lg:hidden inline-flex items-center justify-center p-2 rounded-lg text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+                    </button>
                 </div>
             </div>
+
+            {/* Mobile menu panel */}
+            {mobileOpen && (
+                <div className="lg:hidden border-t border-gray-200 bg-white shadow-lg">
+                    <div className="px-4 py-3 space-y-1 max-h-[calc(100vh-4rem)] overflow-y-auto">
+                        <NavItem
+                            icon={<Home className="w-5 h-5" />}
+                            label="Home"
+                            href="/"
+                            active={activeSection === 'home'}
+                            fullWidth
+                        />
+
+                        {/* Data Entry collapsible */}
+                        <div>
+                            <button
+                                type="button"
+                                onClick={() => setDataEntryOpen(!dataEntryOpen)}
+                                className="flex items-center justify-between w-full gap-2 px-3 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium text-sm"
+                            >
+                                <span className="flex items-center gap-2">
+                                    <Upload className="w-5 h-5" />
+                                    Data Entry
+                                </span>
+                                <ChevronDown className={`w-4 h-4 transition-transform ${dataEntryOpen ? 'rotate-180' : ''}`} />
+                            </button>
+                            {dataEntryOpen && (
+                                <div className="pl-6 mt-1 space-y-1">
+                                    <button
+                                        onClick={() => { onFeatureSelect('upload'); closeMobile(); }}
+                                        className="flex items-center gap-2 w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg text-sm"
+                                    >
+                                        <Upload className="w-4 h-4" />
+                                        CSV Upload
+                                    </button>
+                                    <button
+                                        onClick={() => { onFeatureSelect('manual'); closeMobile(); }}
+                                        className="flex items-center gap-2 w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg text-sm"
+                                    >
+                                        <FileText className="w-4 h-4" />
+                                        Manual Entry
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
+                        <NavItem
+                            icon={<BarChart3 className="w-5 h-5" />}
+                            label="Analysis"
+                            href={currentAnalysisId ? `/dashboard/${currentAnalysisId}` : undefined}
+                            disabled={!currentAnalysisId}
+                            active={activeSection === 'dashboard'}
+                            fullWidth
+                        />
+
+                        <NavItem
+                            icon={<FileCheck className="w-5 h-5" />}
+                            label="Records"
+                            href={currentAnalysisId ? `/records/${currentAnalysisId}` : undefined}
+                            disabled={!currentAnalysisId}
+                            active={activeSection === 'records'}
+                            fullWidth
+                        />
+
+                        <NavItem
+                            icon={<TrendingUp className="w-5 h-5" />}
+                            label="Simulation"
+                            href={currentAnalysisId ? `/dashboard/${currentAnalysisId}` : undefined}
+                            disabled={!currentAnalysisId}
+                            active={activeSection === 'simulation'}
+                            fullWidth
+                        />
+
+                        <NavItem
+                            icon={<MessageSquare className="w-5 h-5" />}
+                            label="Explanations"
+                            href={currentAnalysisId ? `/dashboard/${currentAnalysisId}` : undefined}
+                            disabled={!currentAnalysisId}
+                            active={activeSection === 'explanation'}
+                            fullWidth
+                        />
+
+                        <NavItem
+                            icon={<Database className="w-5 h-5" />}
+                            label="Export"
+                            disabled={true}
+                            active={activeSection === 'export'}
+                            fullWidth
+                        />
+
+                        <NavItem
+                            icon={<Settings className="w-5 h-5" />}
+                            label="Settings"
+                            href="/settings"
+                            active={activeSection === 'settings'}
+                            fullWidth
+                        />
+                    </div>
+                </div>
+            )}
         </nav>
     );
 }

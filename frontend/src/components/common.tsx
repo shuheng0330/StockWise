@@ -1,5 +1,44 @@
 import React from 'react';
-import { AlertCircle, CheckCircle, Info } from 'lucide-react';
+import { AlertCircle, CheckCircle, Info, HelpCircle } from 'lucide-react';
+
+interface HelpTooltipProps {
+  text: string;
+}
+
+export function HelpTooltip({ text }: HelpTooltipProps) {
+  return (
+    <span className="relative inline-flex items-center group align-middle ml-1">
+      <button
+        type="button"
+        tabIndex={0}
+        aria-label="Help"
+        className="inline-flex items-center justify-center w-4 h-4 rounded-full text-gray-400 hover:text-gray-600 focus:outline-none focus:text-gray-600"
+      >
+        <HelpCircle className="w-4 h-4" />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-20 w-56 sm:w-64 px-3 py-2 rounded-md bg-gray-900 text-white text-xs leading-snug shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity duration-150"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+interface LabelWithHelpProps {
+  label: string;
+  tooltip?: string;
+}
+
+function LabelWithHelp({ label, tooltip }: LabelWithHelpProps) {
+  return (
+    <label className="block text-sm font-medium text-gray-700 mb-1">
+      <span>{label}</span>
+      {tooltip && <HelpTooltip text={tooltip} />}
+    </label>
+  );
+}
 
 interface AlertProps {
   type: 'error' | 'success' | 'info' | 'warning';
@@ -58,6 +97,7 @@ export function Button({
   size = 'md',
   loading = false,
   children,
+  className = '',
   ...props
 }: ButtonProps) {
   const baseClass = 'font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -77,9 +117,9 @@ export function Button({
 
   return (
     <button
-      className={`${baseClass} ${variantClass[variant]} ${sizeClass[size]}`}
-      disabled={loading || props.disabled}
       {...props}
+      className={`${baseClass} ${variantClass[variant]} ${sizeClass[size]} ${className}`.trim()}
+      disabled={loading || props.disabled}
     >
       {loading ? 'Loading...' : children}
     </button>
@@ -89,12 +129,13 @@ export function Button({
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
+  tooltip?: string;
 }
 
-export function Input({ label, error, ...props }: InputProps) {
+export function Input({ label, error, tooltip, ...props }: InputProps) {
   return (
     <div className="w-full">
-      {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+      {label && <LabelWithHelp label={label} tooltip={tooltip} />}
       <input
         {...props}
         className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none ${
@@ -109,13 +150,14 @@ export function Input({ label, error, ...props }: InputProps) {
 interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
   error?: string;
+  tooltip?: string;
   options: Array<{ value: string; label: string }>;
 }
 
-export function Select({ label, error, options, ...props }: SelectProps) {
+export function Select({ label, error, tooltip, options, ...props }: SelectProps) {
   return (
     <div className="w-full">
-      {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+      {label && <LabelWithHelp label={label} tooltip={tooltip} />}
       <select
         {...props}
         className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none ${

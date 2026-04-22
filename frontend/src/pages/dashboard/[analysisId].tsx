@@ -101,13 +101,13 @@ export default function Dashboard() {
 
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 md:px-8 py-6">
-          <div className="flex justify-between items-start mb-6">
+        <div className="max-w-7xl mx-auto px-4 md:px-8 py-4 md:py-6">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Analysis Dashboard</h1>
-              <p className="text-gray-600 mt-1">Analysis ID: {analysisId}</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Analysis Dashboard</h1>
+              <p className="text-sm sm:text-base text-gray-600 mt-1 break-all">Analysis ID: {analysisId}</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Link href={`/records/${analysisId}`}>
                 <Button variant="secondary">Review Records</Button>
               </Link>
@@ -118,7 +118,7 @@ export default function Dashboard() {
           </div>
 
           {/* KPI Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -184,9 +184,9 @@ export default function Dashboard() {
       </div>
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
+      <div className="max-w-7xl mx-auto px-4 md:px-8 py-6 md:py-8">
         {/* Filters */}
-        <Card className="p-6 mb-6">
+        <Card className="p-4 md:p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
               placeholder="Search by item name, category, supplier..."
@@ -221,7 +221,7 @@ export default function Dashboard() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Item</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Category</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Date</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Stock</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Days Cover</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Urgency</th>
@@ -239,7 +239,7 @@ export default function Dashboard() {
                         <p className="text-sm text-gray-600">{item.supplier_name}</p>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">{item.category || '-'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">{item.date || '-'}</td>
                     <td className="px-6 py-4 text-sm text-gray-900">
                       {item.current_stock} {item.unit}
                     </td>
@@ -276,7 +276,7 @@ export default function Dashboard() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <Link href={`/simulation/${analysisId}/${item.item_id}`}>
                           <Button variant="secondary" size="sm">Simulate</Button>
                         </Link>
