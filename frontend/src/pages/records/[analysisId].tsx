@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { Button, Card, Alert, Input, Select } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
-import { InventoryItem, ManualItemInput, PerishabilityLevel, UsagePeriod } from '@/types';
+import { InventoryItem, ManualItemInput, PerishabilityLevel, UsagePeriod, RecommendedAction } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 
@@ -16,6 +16,19 @@ export default function RecordsPage() {
   const [error, setError] = useState<string>('');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<ManualItemInput>>({});
+
+  const getActionColor = (action: RecommendedAction) => {
+    switch (action) {
+      case 'RESTOCK_NOW':
+        return 'bg-red-100 text-red-800 border-red-300';
+      case 'BUY_LESS':
+        return 'bg-amber-100 text-amber-800 border-amber-300';
+      case 'DELAY_PURCHASE':
+        return 'bg-blue-100 text-blue-800 border-blue-300';
+      case 'MONITOR_CLOSELY':
+        return 'bg-green-100 text-green-800 border-green-300';
+    }
+  };
 
   useEffect(() => {
     if (!analysisId) return;
@@ -95,7 +108,7 @@ export default function RecordsPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Navigation Bar */}
       <NavigationBar
-        onFeatureSelect={() => {}} // Not used in analysis pages
+        onFeatureSelect={() => { }} // Not used in analysis pages
         currentAnalysisId={analysisId as string}
         activeSection="records"
       />
@@ -193,11 +206,11 @@ export default function RecordsPage() {
                         <td className="px-6 py-4 text-sm text-gray-600">{item.category || '-'}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.current_stock}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.unit}</td>
-                        <td className="px-6 py-4 text-sm text-gray-900">{item.recommended_action}</td>
+                        <td className="px-6 py-4 text-sm text-gray-900">{item.recommended_action.replace('_', ' ')}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.daily_usage.toFixed(2)}</td>
                         <td className="px-6 py-4">
-                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
-                            {item.recommended_action}
+                          <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
+                            {item.recommended_action.replace('_', ' ')}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-sm">

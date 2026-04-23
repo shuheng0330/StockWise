@@ -2,7 +2,7 @@
 
 export type RecommendedAction = 'RESTOCK_NOW' | 'BUY_LESS' | 'DELAY_PURCHASE' | 'MONITOR_CLOSELY';
 export type UsagePeriod = 'daily' | 'weekly';
-export type PerishabilityLevel = 'Low' | 'Medium' | 'High';
+export type PerishabilityLevel = 'low' | 'medium' | 'high';
 
 export interface InventoryItem {
   item_id: number;

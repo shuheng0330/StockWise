@@ -102,7 +102,7 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
           </div>
         </div>
         <div className={`mt-3 p-2 rounded text-sm ${getActionColor(item.recommended_action)}`}>
-          <strong>Recommendation:</strong> {item.recommended_action}
+          <strong>Recommendation:</strong> {item.recommended_action.replace('_', ' ')}
         </div>
       </div>
 
