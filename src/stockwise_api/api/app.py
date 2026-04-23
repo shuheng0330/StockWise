@@ -15,12 +15,22 @@ from stockwise_api.schemas import (
     ExplanationResponse,
     ManualAnalysisRequest,
     RecordItem,
+    ManualAnalysisRequest,
+    RecordItem,
     SimulationRequest,
     SimulationResponse,
     RecordUpdateRequest,
     RecordsResponse,
+    RecordUpdateRequest,
+    RecordsResponse,
 )
 from stockwise_api.services.glm import build_explanation_context, provider_from_env
+from stockwise_api.services.manual_input import (
+    ManualInputValidationError,
+    item_to_record_view,
+    normalize_item_history,
+    normalize_manual_items,
+)
 from stockwise_api.services.manual_input import (
     ManualInputValidationError,
     item_to_record_view,
@@ -133,6 +143,10 @@ def create_app(glm_provider=None) -> FastAPI:
     async def handle_manual_input_validation_error(_: Request, exc: ManualInputValidationError):
         return _safe_error(400, "manual_input_validation_error", str(exc))
 
+    @app.exception_handler(ManualInputValidationError)
+    async def handle_manual_input_validation_error(_: Request, exc: ManualInputValidationError):
+        return _safe_error(400, "manual_input_validation_error", str(exc))
+
     @app.exception_handler(ExplanationValidationError)
     async def handle_explanation_validation_error(
         _: Request, exc: ExplanationValidationError
@@ -209,12 +223,6 @@ def create_app(glm_provider=None) -> FastAPI:
         simulated = simulate_item_quantity(item, request.simulated_order_qty)
         return simulated
 
-<<<<<<< HEAD
-    @app.post(
-        "/api/v1/analyses/{analysis_id}/items/{item_id}/explanation",
-        response_model=ExplanationResponse,
-    )
-=======
     @app.patch("/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordItem)
     async def update_record(analysis_id: str, item_id: int, request: RecordUpdateRequest):
         try:
@@ -269,7 +277,6 @@ def create_app(glm_provider=None) -> FastAPI:
         return _records_payload(app.state.store, analysis_id)
 
     @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/explanation", response_model=ExplanationResponse)
->>>>>>> 066dd37 (feat: add contracts and manual input validation updates)
     async def explain_item(analysis_id: str, item_id: int, request: ExplanationRequest):
         try:
             # Try to get from Supabase store first, fall back to in-memory store

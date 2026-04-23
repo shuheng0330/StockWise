@@ -207,7 +207,6 @@ def validate_inventory_csv(raw_bytes: bytes) -> tuple[list[dict], DatasetSummary
         date_range=_summarize_date_range(validated_rows),
     )
     return validated_rows, summary
-    return normalized, summary
 
 
 def validate_manual_items(items: list[dict]) -> tuple[pd.DataFrame, DatasetSummary]:
