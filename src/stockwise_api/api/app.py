@@ -1,8 +1,12 @@
 from dataclasses import asdict, is_dataclass
 from datetime import date
+import os
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from supabase import create_client, Client
+from dotenv import load_dotenv
 
 from stockwise_api.schemas import (
     AnalysisResponse,
@@ -23,21 +27,35 @@ from stockwise_api.services.manual_input import (
     normalize_item_history,
     normalize_manual_items,
 )
-from stockwise_api.services.parsing import ExplanationValidationError, build_fallback_explanation, parse_explanation_response
-from stockwise_api.services.recommendations import build_kpi_summary, build_ranked_analysis
+from stockwise_api.services.parsing import (
+    ExplanationValidationError,
+    build_fallback_explanation,
+    parse_explanation_response,
+)
+from stockwise_api.services.recommendations import (
+    build_kpi_summary,
+    build_ranked_analysis,
+)
 from stockwise_api.services.simulation import simulate_item_quantity
-from stockwise_api.services.validation import ValidationError, validate_inventory_csv
-from stockwise_api.store import InMemoryAnalysisStore
+from stockwise_api.services.validation import (
+    ValidationError,
+    validate_inventory_csv,
+)
+from stockwise_api.store import InMemoryAnalysisStore, SupabaseAnalysisStore
 
 
 def _strip_internal_fields(payload: dict) -> dict:
     return {key: value for key, value in payload.items() if not key.startswith("_")}
 
 
-def _safe_error(status_code: int, error_code: str, message: str, details=None) -> JSONResponse:
+def _safe_error(
+    status_code: int, error_code: str, message: str, details=None
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
-        content=ErrorEnvelope(error_code=error_code, message=message, details=details).model_dump(),
+        content=ErrorEnvelope(
+            error_code=error_code, message=message, details=details
+        ).model_dump(),
     )
 
 
@@ -70,18 +88,66 @@ def _date_range_from_manual_items(items: list[dict]) -> dict:
     }
 
 
-def _save_analysis(store, items: list[dict], dataset_summary: dict, analysis_id: str | None = None) -> str:
+def _save_analysis(
+    store,
+    supabase_store,
+    items: list[dict],
+    dataset_summary: dict,
+    analysis_id: str | None = None,
+) -> str:
     ranked_items = build_ranked_analysis(items)
     kpis = build_kpi_summary(ranked_items)
     if analysis_id is None:
-        return store.create(dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items)
-    store.update(analysis_id=analysis_id, dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items)
+        # Save to both stores
+        analysis_id = store.create(
+            dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items
+        )
+        try:
+            supabase_store.create(
+                dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items
+            )
+        except Exception as e:
+            # Log error but don't fail the request
+            print(f"Failed to save to Supabase: {e}")
+    else:
+        store.update(
+            analysis_id=analysis_id,
+            dataset_summary=dataset_summary,
+            kpi_summary=kpis,
+            items=ranked_items,
+        )
+        # Note: Supabase update not implemented yet
     return analysis_id
 
 
 def create_app(glm_provider=None) -> FastAPI:
+    load_dotenv()  # Load environment variables from .env file
+
     app = FastAPI(title="StockWise Backend", version="0.1.0")
+
+    # Add CORS middleware (from shun branch - required for frontend)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
+        ],
+        # allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Initialize Supabase client
+    app.state.supabase: Client = create_client(
+        supabase_url=os.getenv("SUPABASE_URL"),
+        supabase_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+    )
+
     app.state.store = InMemoryAnalysisStore()
+    app.state.supabase_store = SupabaseAnalysisStore(app.state.supabase)
     app.state.glm_provider = glm_provider or provider_from_env()
 
     @app.exception_handler(ValidationError)
@@ -89,21 +155,39 @@ def create_app(glm_provider=None) -> FastAPI:
         return _safe_error(400, "validation_error", str(exc))
 
     @app.exception_handler(ManualInputValidationError)
-    async def handle_manual_input_validation_error(_: Request, exc: ManualInputValidationError):
+    async def handle_manual_input_validation_error(
+        _: Request, exc: ManualInputValidationError
+    ):
         return _safe_error(400, "manual_input_validation_error", str(exc))
 
     @app.exception_handler(ExplanationValidationError)
-    async def handle_explanation_validation_error(_: Request, exc: ExplanationValidationError):
+    async def handle_explanation_validation_error(
+        _: Request, exc: ExplanationValidationError
+    ):
         return _safe_error(400, "explanation_validation_error", str(exc))
+
+    # GET endpoint added by teammate 2 (frontend needs this)
+    @app.get("/api/v1/analyses/{analysis_id}", response_model=AnalysisResponse)
+    async def get_analysis(analysis_id: str):
+        analysis = app.state.store.get(analysis_id)
+        if not analysis:
+            raise HTTPException(
+                status_code=404, detail=f"Analysis {analysis_id} not found."
+            )
+        return _analysis_payload(app.state.store, analysis_id)
 
     @app.post("/api/v1/analyses", response_model=AnalysisResponse)
     async def create_analysis(file: UploadFile = File(...)):
         raw = await file.read()
         validated_rows, summary = validate_inventory_csv(raw)
-        normalized_items = normalize_item_history(validated_rows, preserve_item_ids=True)
+        normalized_items = normalize_item_history(
+            validated_rows, preserve_item_ids=True
+        )
         dataset_summary = asdict(summary)
         dataset_summary["item_count"] = len(normalized_items)
-        analysis_id = _save_analysis(app.state.store, normalized_items, dataset_summary)
+        analysis_id = _save_analysis(
+            app.state.store, app.state.supabase_store, normalized_items, dataset_summary
+        )
         return _analysis_payload(app.state.store, analysis_id)
 
     @app.post("/api/v1/manual-analyses", response_model=AnalysisResponse)
@@ -115,7 +199,9 @@ def create_app(glm_provider=None) -> FastAPI:
             "item_count": len(normalized_items),
             "date_range": _date_range_from_manual_items(raw_items),
         }
-        analysis_id = _save_analysis(app.state.store, normalized_items, dataset_summary)
+        analysis_id = _save_analysis(
+            app.state.store, app.state.supabase_store, normalized_items, dataset_summary
+        )
         return _analysis_payload(app.state.store, analysis_id)
 
     @app.get("/api/v1/analyses/{analysis_id}/records", response_model=RecordsResponse)
@@ -125,21 +211,30 @@ def create_app(glm_provider=None) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/simulate", response_model=SimulationResponse)
-    async def simulate_item(analysis_id: str, item_id: int, request: SimulationRequest):
+    @app.post(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}/simulate",
+        response_model=SimulationResponse,
+    )
+    async def simulate_item(analysis_id: str, item_id: str, request: SimulationRequest):
         try:
-            item = app.state.store.get_item(analysis_id, item_id)
-        except KeyError as exc:
+            # Convert item_id to int for store lookup
+            item = app.state.store.get_item(analysis_id, int(item_id))
+        except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         simulated = simulate_item_quantity(item, request.simulated_order_qty)
         return simulated
 
-    @app.patch("/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordItem)
-    async def update_record(analysis_id: str, item_id: int, request: RecordUpdateRequest):
+    @app.patch(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordItem
+    )
+    async def update_record(
+        analysis_id: str, item_id: str, request: RecordUpdateRequest
+    ):
         try:
+            # Convert item_id to int for store lookup
             record = app.state.store.get(analysis_id)
-            existing_item = app.state.store.get_item(analysis_id, item_id)
-        except KeyError as exc:
+            existing_item = app.state.store.get_item(analysis_id, int(item_id))
+        except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         editable = item_to_record_view(existing_item)
@@ -148,7 +243,9 @@ def create_app(glm_provider=None) -> FastAPI:
         patch = request.model_dump(exclude_none=True)
         editable.update(patch)
         normalized_item = normalize_manual_items([editable], preserve_item_ids=True)[0]
-        normalized_item["_observation_count"] = int(existing_item.get("_observation_count", 1))
+        normalized_item["_observation_count"] = int(
+            existing_item.get("_observation_count", 1)
+        )
         updated_items = [
             normalized_item if int(item["item_id"]) == int(item_id) else item
             for item in record.items
@@ -157,23 +254,40 @@ def create_app(glm_provider=None) -> FastAPI:
             **record.dataset_summary,
             "item_count": len(updated_items),
         }
-        _save_analysis(app.state.store, updated_items, dataset_summary, analysis_id=analysis_id)
-        updated_item = app.state.store.get_item(analysis_id, item_id)
+        _save_analysis(
+            app.state.store,
+            app.state.supabase_store,
+            updated_items,
+            dataset_summary,
+            analysis_id=analysis_id,
+        )
+        updated_item = app.state.store.get_item(analysis_id, int(item_id))
         return item_to_record_view(updated_item)
 
-    @app.delete("/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordsResponse)
-    async def delete_record(analysis_id: str, item_id: int):
+    @app.delete(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordsResponse
+    )
+    async def delete_record(analysis_id: str, item_id: str):
         try:
+            # Convert item_id to int for store lookup
             record = app.state.store.get(analysis_id)
-        except KeyError as exc:
+            item_id_int = int(item_id)
+        except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        remaining_items = [item for item in record.items if int(item["item_id"]) != int(item_id)]
+        remaining_items = [
+            item for item in record.items if int(item["item_id"]) != item_id_int
+        ]
         if len(remaining_items) == len(record.items):
             raise HTTPException(status_code=404, detail=f"Unknown item_id: {item_id}")
         if not remaining_items:
-            raise HTTPException(status_code=400, detail="Cannot delete the last remaining item in the analysis.")
-        removed_item = next(item for item in record.items if int(item["item_id"]) == int(item_id))
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the last remaining item in the analysis.",
+            )
+        removed_item = next(
+            item for item in record.items if int(item["item_id"]) == item_id_int
+        )
         remaining_row_count = max(
             len(remaining_items),
             int(record.dataset_summary.get("row_count", len(record.items)))
@@ -184,15 +298,31 @@ def create_app(glm_provider=None) -> FastAPI:
             "row_count": remaining_row_count,
             "item_count": len(remaining_items),
         }
-        _save_analysis(app.state.store, remaining_items, dataset_summary, analysis_id=analysis_id)
+        _save_analysis(
+            app.state.store,
+            app.state.supabase_store,
+            remaining_items,
+            dataset_summary,
+            analysis_id=analysis_id,
+        )
         return _records_payload(app.state.store, analysis_id)
 
-    @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/explanation", response_model=ExplanationResponse)
-    async def explain_item(analysis_id: str, item_id: int, request: ExplanationRequest):
+    @app.post(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}/explanation",
+        response_model=ExplanationResponse,
+    )
+    async def explain_item(analysis_id: str, item_id: str, request: ExplanationRequest):
         try:
-            item = app.state.store.get_item(analysis_id, item_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            # Convert item_id to int for store lookup
+            item_id_int = int(item_id)
+            # Try to get from Supabase store first, fall back to in-memory store
+            item = app.state.supabase_store.get_item(analysis_id, item_id_int)
+        except (KeyError, NotImplementedError, ValueError):
+            try:
+                item_id_int = int(item_id)
+                item = app.state.store.get_item(analysis_id, item_id_int)
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         simulation_context = None
         if request.simulated_order_qty is not None:
@@ -227,5 +357,10 @@ def create_app(glm_provider=None) -> FastAPI:
         details = exc.detail
         message = details if isinstance(details, str) else "Request failed."
         return _safe_error(exc.status_code, "request_error", message, details=details)
+
+    @app.exception_handler(Exception)
+    async def handle_unhandled_exception(_: Request, exc: Exception):
+        print(f"Unhandled exception: {type(exc).__name__}: {exc}")
+        return _safe_error(500, "internal_error", str(exc))
 
     return app

@@ -1,0 +1,185 @@
+import React, { useState } from 'react';
+import { InventoryItem } from '@/types';
+import { Button, Input } from './common';
+
+interface ItemSimulationProps {
+  item: InventoryItem;
+  analysisId: string;
+  onSimulate: (qty: number) => Promise<any>;
+  isLoading?: boolean;
+}
+
+export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimulationProps) {
+  const [simQty, setSimQty] = useState<number>(item.reorder_level);
+  const [simulationResult, setSimulationResult] = useState<any>(null);
+  const [error, setError] = useState<string>('');
+
+  const handleSimulate = async () => {
+    setError('');
+    try {
+      const result = await onSimulate(simQty);
+      setSimulationResult(result);
+    } catch (err: any) {
+      setError(err.message || 'Simulation failed');
+    }
+  };
+
+  const getActionColor = (action: string) => {
+    switch (action) {
+      case 'RESTOCK_NOW':
+        return 'text-red-600 bg-red-50';
+      case 'BUY_LESS':
+        return 'text-amber-600 bg-amber-50';
+      case 'DELAY_PURCHASE':
+        return 'text-blue-600 bg-blue-50';
+      case 'MONITOR_CLOSELY':
+        return 'text-green-600 bg-green-50';
+      default:
+        return 'text-gray-600 bg-gray-50';
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Current State */}
+      <div className="bg-gray-50 rounded-lg p-4">
+        <h4 className="font-semibold text-gray-900 mb-3">Current State</h4>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <p className="text-gray-600 text-sm">Current Stock</p>
+            <p className="font-semibold text-lg">{item.current_stock} {item.unit}</p>
+          </div>
+          <div>
+            <p className="text-gray-600 text-sm">Days of Cover</p>
+            <p className="font-semibold text-lg">{item.days_of_cover.toFixed(1)}</p>
+          </div>
+          <div>
+            <p className="text-gray-600 text-sm">Inventory Value</p>
+            <p className="font-semibold text-lg">${item.inventory_value.toFixed(2)}</p>
+          </div>
+          <div>
+            <p className="text-gray-600 text-sm">Waste Cost</p>
+            <p className="font-semibold text-lg">${item.estimated_waste_cost.toFixed(2)}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-4">
+          <div>
+            <p className="text-gray-600 text-sm">Urgency Score</p>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-white rounded border border-gray-300 h-2">
+                <div
+                  className="bg-red-500 h-full rounded"
+                  style={{ width: `${Math.min(item.reorder_urgency_score, 100)}%` }}
+                />
+              </div>
+              <span className="font-semibold">{item.reorder_urgency_score.toFixed(0)}</span>
+            </div>
+          </div>
+          <div>
+            <p className="text-gray-600 text-sm">Waste Risk Score</p>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-white rounded border border-gray-300 h-2">
+                <div
+                  className="bg-yellow-500 h-full rounded"
+                  style={{ width: `${Math.min(item.waste_risk_score, 100)}%` }}
+                />
+              </div>
+              <span className="font-semibold">{item.waste_risk_score.toFixed(0)}</span>
+            </div>
+          </div>
+        </div>
+        <div className={`mt-3 p-2 rounded text-sm ${getActionColor(item.recommended_action)}`}>
+          <strong>Recommendation:</strong> {item.recommended_action.replace('_', ' ')}
+        </div>
+      </div>
+
+      {/* Simulation Input */}
+      <div className="border rounded-lg p-4">
+        <h4 className="font-semibold text-gray-900 mb-3">Test a Reorder Quantity</h4>
+        <div className="flex gap-3 items-end">
+          <div className="flex-1">
+            <Input
+              label={`Proposed Reorder Quantity (${item.unit})`}
+              type="number"
+              min="0"
+              step={item.unit === 'pieces' ? '1' : '0.01'}
+              value={simQty}
+              onChange={(e) => setSimQty(parseFloat(e.target.value) || 0)}
+            />
+          </div>
+          <Button
+            variant="primary"
+            onClick={handleSimulate}
+            loading={isLoading}
+          >
+            Simulate
+          </Button>
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-900 text-sm">
+          {error}
+        </div>
+      )}
+
+      {/* Simulation Results */}
+      {simulationResult && (
+        <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+          <h4 className="font-semibold text-gray-900 mb-3">Simulated Results</h4>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <div>
+              <p className="text-gray-600 text-sm">Reorder Qty</p>
+              <p className="font-semibold text-lg">{simulationResult.simulated_order_qty} {item.unit}</p>
+            </div>
+            <div>
+              <p className="text-gray-600 text-sm">Cash Outlay</p>
+              <p className="font-semibold text-lg">${simulationResult.simulated_cash_outlay.toFixed(2)}</p>
+            </div>
+            <div>
+              <p className="text-gray-600 text-sm">Coverage Days</p>
+              <p className="font-semibold text-lg">{simulationResult.simulated_coverage_days.toFixed(1)}</p>
+            </div>
+            <div>
+              <p className="text-gray-600 text-sm">Waste Cost</p>
+              <p className="font-semibold text-lg">${simulationResult.simulated_estimated_waste_cost.toFixed(2)}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div>
+              <p className="text-gray-600 text-sm">Urgency Score</p>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 bg-white rounded border border-gray-300 h-2">
+                  <div
+                    className="bg-red-500 h-full rounded"
+                    style={{ width: `${Math.min(simulationResult.reorder_urgency_score, 100)}%` }}
+                  />
+                </div>
+                <span className="font-semibold">{simulationResult.reorder_urgency_score.toFixed(0)}</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-gray-600 text-sm">Waste Risk Score</p>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 bg-white rounded border border-gray-300 h-2">
+                  <div
+                    className="bg-yellow-500 h-full rounded"
+                    style={{ width: `${Math.min(simulationResult.waste_risk_score, 100)}%` }}
+                  />
+                </div>
+                <span className="font-semibold">{simulationResult.waste_risk_score.toFixed(0)}</span>
+              </div>
+            </div>
+          </div>
+          <div className={`p-2 rounded text-sm ${getActionColor(simulationResult.recommended_action)}`}>
+            <strong>New Recommendation:</strong> {simulationResult.recommended_action}
+          </div>
+          <div className="mt-3 text-sm text-gray-600">
+            <strong>Risk Change:</strong> {simulationResult.simulated_risk_change > 0 ? '+' : ''}{simulationResult.simulated_risk_change.toFixed(2)}%
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

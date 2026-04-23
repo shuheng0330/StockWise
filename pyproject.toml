@@ -10,6 +10,8 @@ dependencies = [
     "pydantic>=2.13.1",
     "python-multipart>=0.0.26",
     "uvicorn>=0.44.0",
+    "supabase>=2.3.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.pytest.ini_options]
