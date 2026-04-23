@@ -18,11 +18,6 @@ ENV/
 
 # Test, type-check, lint, and coverage caches
 .pytest_cache/
-
-# Environment variables
-.env
-.env.local
-.env.*.local
 .mypy_cache/
 .ruff_cache/
 .pyre/
