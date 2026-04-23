@@ -174,9 +174,80 @@ def validate_inventory_csv(raw_bytes: bytes) -> tuple[list[dict], DatasetSummary
         payload = _canonicalize_csv_row(row)
         validated_rows.append(validate_manual_item_payload(payload))
 
+    normalized = dataframe[REQUIRED_COLUMNS].copy()
+
+    for column in STRING_COLUMNS:
+        normalized[column] = normalized[column].astype(str).str.strip()
+
+    normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce")
+    if normalized["Date"].isna().any():
+        raise ValidationError("CSV contains invalid Date values.")
+
+    for column in NUMERIC_COLUMNS:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+        if normalized[column].isna().any():
+            raise ValidationError(f"CSV contains non-numeric values in {column}.")
+        if (normalized[column] < 0).any():
+            raise ValidationError(f"CSV contains negative values in {column}.")
+
+    if (normalized["Daily_Usage"] <= 0).any():
+        raise ValidationError(
+            "CSV contains Daily_Usage values that are zero or negative."
+        )
+
+    normalized["Item_ID"] = pd.to_numeric(normalized["Item_ID"], errors="coerce")
+    if normalized["Item_ID"].isna().any():
+        raise ValidationError("CSV contains invalid Item_ID values.")
+    normalized["Item_ID"] = normalized["Item_ID"].astype(int)
+    normalized["Lead_Time"] = normalized["Lead_Time"].astype(int)
+
     summary = DatasetSummary(
         row_count=int(len(validated_rows)),
         item_count=int(len(validated_rows)),
         date_range=_summarize_date_range(validated_rows),
     )
     return validated_rows, summary
+
+
+def validate_manual_items(items: list[dict]) -> tuple[pd.DataFrame, DatasetSummary]:
+    if not items:
+        raise ValidationError("No items provided.")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    rows = []
+    for idx, item in enumerate(items, start=1):
+        daily_usage = (
+            item["usage_value"]
+            if item["usage_period"] == "daily"
+            else item["usage_value"] / 7
+        )
+        if daily_usage <= 0:
+            raise ValidationError(f"Invalid usage value for item {item['item_name']}.")
+
+        row = {
+            "Date": today,
+            "Item_ID": idx,
+            "Item_Name": item["item_name"],
+            "Category": item.get("category") or "",
+            "Subcategory": "",
+            "Unit": item["unit"],
+            "Current_Stock": item["current_stock"],
+            "Reorder_Level": 0,  # Assume 0 for manual
+            "Daily_Usage": daily_usage,
+            "Lead_Time": item["lead_time_days"],
+            "Price_per_Unit": item["price_per_unit"],
+            "Supplier_Name": "",
+            "Seasonal_Factor": item["seasonal_factor"],
+            "Waste_Percentage": 0,  # Assume 0 for manual
+        }
+        rows.append(row)
+
+    dataframe = pd.DataFrame(rows)
+    dataframe["Date"] = pd.to_datetime(dataframe["Date"])
+
+    summary = DatasetSummary(
+        row_count=len(dataframe),
+        item_count=len(dataframe),
+        date_range=DateRangeSummary(start=today, end=today),
+    )
+    return dataframe, summary
