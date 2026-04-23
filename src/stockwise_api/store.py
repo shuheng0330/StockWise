@@ -1,8 +1,11 @@
+import logging
 from dataclasses import dataclass
 from uuid import uuid4
-from typing import Optional
+
 from supabase import Client
-import logging
+
+from stockwise_api.services.recommendations import build_kpi_summary
+from stockwise_api.services.manual_input import normalize_manual_items
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +21,8 @@ class InMemoryAnalysisStore:
     def __init__(self) -> None:
         self._records: dict[str, AnalysisRecord] = {}
 
-    def create(self, dataset_summary: dict, kpi_summary: dict, items: list[dict]) -> str:
-        analysis_id = str(uuid4())
+    def create(self, dataset_summary: dict, kpi_summary: dict, items: list[dict], analysis_id: str | None = None) -> str:
+        analysis_id = analysis_id or str(uuid4())
         self._records[analysis_id] = AnalysisRecord(
             dataset_summary=dataset_summary,
             kpi_summary=kpi_summary,
@@ -52,136 +55,312 @@ class SupabaseAnalysisStore:
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client
 
+    def persist_observations(
+        self,
+        observations: list[dict],
+        *,
+        source_type: str,
+        file_name: str | None = None,
+        file_type: str | None = None,
+        uploaded_by: str | None = None,
+        created_by: str | None = None,
+    ) -> dict:
+        if source_type not in {"manual", "import"}:
+            raise ValueError("source_type must be 'manual' or 'import'.")
+
+        normalized_observations = normalize_manual_items(observations)
+        import_batch_id = None
+        successful_rows = 0
+        failed_rows = 0
+        latest_records_by_history_identity: dict[str, dict] = {}
+
+        if source_type == "import":
+            import_batch_id = self._create_import_batch(
+                file_name=file_name,
+                file_type=file_type,
+                uploaded_by=uploaded_by,
+                total_rows=len(observations),
+            )
+
+        for row_number, (raw_observation, observation) in enumerate(
+            zip(observations, normalized_observations),
+            start=1,
+        ):
+            try:
+                supplier_id = self._find_or_create_supplier(observation.get("supplier_name"))
+                item_id = self._find_or_create_item(observation, supplier_id=supplier_id)
+                record = self._inventory_record_payload(
+                    observation,
+                    item_id=item_id,
+                    source_type=source_type,
+                    import_batch_id=import_batch_id,
+                    created_by=created_by,
+                )
+                record_result = self.supabase.table("inventory_records").insert(record).execute()
+                inserted_record = record_result.data[0]
+                history_identity = observation.get("_history_identity")
+                if history_identity is not None:
+                    latest_records_by_history_identity[history_identity] = {
+                        "item_id": item_id,
+                        "record_id": inserted_record["record_id"],
+                    }
+                successful_rows += 1
+            except Exception as exc:
+                failed_rows += 1
+                logger.error("Failed to persist inventory observation row %s: %s", row_number, exc)
+                if import_batch_id is not None:
+                    self._record_import_row_error(
+                        import_batch_id=import_batch_id,
+                        row_number=row_number,
+                        error_message=str(exc),
+                        raw_data=raw_observation,
+                    )
+
+        if import_batch_id is not None:
+            self._update_import_batch(
+                import_batch_id=import_batch_id,
+                successful_rows=successful_rows,
+                failed_rows=failed_rows,
+            )
+
+        return {
+            "import_batch_id": import_batch_id,
+            "successful_rows": successful_rows,
+            "failed_rows": failed_rows,
+            "latest_records_by_history_identity": latest_records_by_history_identity,
+        }
+
+    def _create_import_batch(
+        self,
+        *,
+        file_name: str | None,
+        file_type: str | None,
+        uploaded_by: str | None,
+        total_rows: int,
+    ) -> str:
+        batch = {
+            "file_name": file_name,
+            "file_type": file_type,
+            "uploaded_by": uploaded_by,
+            "status": "pending",
+            "total_rows": total_rows,
+            "successful_rows": 0,
+            "failed_rows": 0,
+        }
+        result = self.supabase.table("import_batches").insert(batch).execute()
+        return result.data[0]["import_batch_id"]
+
+    def _update_import_batch(self, *, import_batch_id: str, successful_rows: int, failed_rows: int) -> None:
+        if failed_rows == 0:
+            status = "success"
+        elif successful_rows == 0:
+            status = "failed"
+        else:
+            status = "partial"
+
+        self.supabase.table("import_batches").update(
+            {
+                "status": status,
+                "successful_rows": successful_rows,
+                "failed_rows": failed_rows,
+            }
+        ).eq("import_batch_id", import_batch_id).execute()
+
+    def _record_import_row_error(
+        self,
+        *,
+        import_batch_id: str,
+        row_number: int,
+        error_message: str,
+        raw_data: dict,
+    ) -> None:
+        self.supabase.table("import_row_errors").insert(
+            {
+                "import_batch_id": import_batch_id,
+                "row_number": row_number,
+                "error_message": error_message,
+                "raw_data": raw_data,
+            }
+        ).execute()
+
+    def _find_or_create_supplier(self, supplier_name: str | None) -> str | None:
+        normalized_supplier = _normalize_optional_text(supplier_name)
+        if normalized_supplier is None or normalized_supplier.lower() == "unknown":
+            return None
+
+        result = (
+            self.supabase.table("suppliers")
+            .select("supplier_id")
+            .eq("supplier_name", normalized_supplier)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]["supplier_id"]
+
+        inserted = self.supabase.table("suppliers").insert({"supplier_name": normalized_supplier}).execute()
+        return inserted.data[0]["supplier_id"]
+
+    def _find_or_create_item(self, item: dict, *, supplier_id: str | None) -> str:
+        item_identity = {
+            "item_name": item["item_name"],
+            "category": item.get("category"),
+            "subcategory": item.get("subcategory"),
+            "unit": item.get("unit"),
+            "supplier_id": supplier_id,
+        }
+
+        result = (
+            self.supabase.table("items")
+            .select("item_id,item_name,category,subcategory,unit,supplier_id")
+            .eq("item_name", item_identity["item_name"])
+            .execute()
+        )
+        for existing_item in result.data:
+            if _same_item_identity(existing_item, item_identity):
+                return existing_item["item_id"]
+
+        inserted = self.supabase.table("items").insert(item_identity).execute()
+        return inserted.data[0]["item_id"]
+
+    def _inventory_record_payload(
+        self,
+        item: dict,
+        *,
+        item_id: str,
+        source_type: str,
+        import_batch_id: str | None,
+        created_by: str | None,
+    ) -> dict:
+        return {
+            "record_date": item["date"],
+            "item_id": item_id,
+            "current_stock": float(item["current_stock"]),
+            "reorder_level": float(item["reorder_level"]),
+            "daily_usage": float(item["daily_usage"]),
+            "lead_time": int(item["lead_time"]),
+            "price_per_unit": float(item["price_per_unit"]),
+            "seasonal_factor": float(item.get("seasonal_factor", 1.0)),
+            "waste_percentage": float(item.get("waste_percentage", 0)),
+            "input_source": source_type,
+            "import_batch_id": import_batch_id,
+            "created_by": created_by,
+        }
+
+    def create_analysis_snapshot(
+        self,
+        *,
+        dataset_summary: dict,
+        ranked_items: list[dict],
+        source_type: str,
+        import_batch_id: str | None = None,
+        created_by: str | None = None,
+        formula_version: str = "stockwise-v1",
+    ) -> str:
+        if source_type not in {"manual", "import"}:
+            raise ValueError("source_type must be 'manual' or 'import'.")
+
+        date_range = dataset_summary.get("date_range", {})
+        analysis_run = {
+            "import_batch_id": import_batch_id,
+            "source_type": source_type,
+            "date_range_start": date_range.get("start"),
+            "date_range_end": date_range.get("end"),
+            "observation_count": int(dataset_summary.get("row_count", len(ranked_items))),
+            "item_count": int(dataset_summary.get("item_count", len(ranked_items))),
+            "formula_version": formula_version,
+            "created_by": created_by,
+        }
+        run_result = self.supabase.table("analysis_runs").insert(analysis_run).execute()
+        analysis_id = run_result.data[0]["analysis_id"]
+
+        for rank_position, item in enumerate(ranked_items, start=1):
+            self.supabase.table("analysis_item_results").insert(
+                self._analysis_item_result_payload(
+                    analysis_id=analysis_id,
+                    rank_position=rank_position,
+                    item=item,
+                )
+            ).execute()
+
+        return analysis_id
+
+    def _analysis_item_result_payload(self, *, analysis_id: str, rank_position: int, item: dict) -> dict:
+        return {
+            "analysis_id": analysis_id,
+            "item_id": item.get("_supabase_item_id"),
+            "latest_record_id": item.get("_latest_record_id"),
+            "app_item_id": int(item["item_id"]),
+            "latest_record_date": item["date"],
+            "rank_position": rank_position,
+            "item_name": item["item_name"],
+            "category": item.get("category"),
+            "subcategory": item.get("subcategory"),
+            "unit": item["unit"],
+            "supplier_name": item.get("supplier_name"),
+            "current_stock": float(item["current_stock"]),
+            "reorder_level": float(item["reorder_level"]),
+            "daily_usage": float(item["daily_usage"]),
+            "lead_time": int(item["lead_time"]),
+            "price_per_unit": float(item["price_per_unit"]),
+            "seasonal_factor": float(item["seasonal_factor"]),
+            "waste_percentage": float(item["waste_percentage"]),
+            "avg_usage_7d": float(item["avg_usage_7d"]),
+            "trend_direction": item["trend_direction"],
+            "days_of_cover": float(item["days_of_cover"]),
+            "inventory_value": float(item["inventory_value"]),
+            "estimated_waste_cost": float(item["estimated_waste_cost"]),
+            "lead_time_demand": float(item["lead_time_demand"]),
+            "stock_gap_to_lead_demand": float(item["stock_gap_to_lead_demand"]),
+            "reorder_urgency_score": int(item["reorder_urgency_score"]),
+            "waste_risk_score": int(item["waste_risk_score"]),
+            "recommended_action": item["recommended_action"],
+        }
+
     def create(self, dataset_summary: dict, kpi_summary: dict, items: list[dict]) -> str:
         analysis_id = str(uuid4())
-        successful_items = 0
-        failed_items = 0
-
-        try:
-            # Create import batch record
-            import_batch = {
-                "file_name": f"analysis_{analysis_id}",
-                "file_type": "analysis",
-                "status": "pending",
-                "total_rows": len(items),
-                "successful_rows": 0,
-                "failed_rows": 0
-            }
-
-            batch_result = self.supabase.table("import_batches").insert(import_batch).execute()
-            import_batch_id = batch_result.data[0]["import_batch_id"]
-            logger.info(f"Created import batch: {import_batch_id}")
-
-            # Process items and inventory records
-            for idx, item in enumerate(items):
-                try:
-                    # Validate subcategory
-                    if not item.get("subcategory"):
-                        logger.warning(f"Missing subcategory for item: {item.get('item_name')}")
-
-                    # Validate supplier_name
-                    if not item.get("supplier_name"):
-                        logger.warning(f"Missing supplier_name for item: {item.get('item_name')}")
-
-                    # Ensure supplier exists
-                    supplier_id = None
-                    if item.get("supplier_name"):
-                        supplier_result = self.supabase.table("suppliers").select("supplier_id").eq("supplier_name", item["supplier_name"]).execute()
-                        if supplier_result.data:
-                            supplier_id = supplier_result.data[0]["supplier_id"]
-                            logger.info(f"Supplier already exists: {item['supplier_name']} with id {supplier_id}")
-                        else:
-                            supplier_data = {"supplier_name": item["supplier_name"]}
-                            supplier_insert_result = self.supabase.table("suppliers").insert(supplier_data).execute()
-                            supplier_id = supplier_insert_result.data[0]["supplier_id"]
-                            logger.info(f"Created new supplier: {item['supplier_name']} with id {supplier_id}")
-
-                    # Ensure item exists
-                    item_data = {
-                        "item_name": item["item_name"],
-                        "category": item.get("category"),
-                        "subcategory": item.get("subcategory"),
-                        "unit": item.get("unit", "pieces"),
-                        "supplier_id": supplier_id
-                    }
-
-                    # Check if item already exists
-                    try:
-                        existing_item = self.supabase.table("items").select("item_id").eq("item_name", item["item_name"]).execute()
-                        if existing_item.data:
-                            item_id = existing_item.data[0]["item_id"]
-                            logger.info(f"Item already exists: {item['item_name']} with id {item_id}")
-                        else:
-                            item_result = self.supabase.table("items").insert(item_data).execute()
-                            item_id = item_result.data[0]["item_id"]
-                            logger.info(f"Created new item: {item['item_name']} with id {item_id}")
-                    except Exception as e:
-                        logger.error(f"Error creating/checking item {item.get('item_name')}: {e}")
-                        failed_items += 1
-                        continue
-
-                    # Create inventory record
-                    record_data = {
-                        "record_date": item.get("record_date", "2024-01-01"),
-                        "item_id": item_id,
-                        "current_stock": float(item["current_stock"]),
-                        "reorder_level": float(item["reorder_level"]),
-                        "daily_usage": float(item["daily_usage"]),
-                        "lead_time": int(item["lead_time"]),
-                        "price_per_unit": float(item["price_per_unit"]),
-                        "seasonal_factor": float(item.get("seasonal_factor", 1.0)),
-                        "waste_percentage": float(item.get("waste_percentage", 0)),
-                        "input_source": "import",
-                        "import_batch_id": import_batch_id
-                    }
-
-                    try:
-                        self.supabase.table("inventory_records").insert(record_data).execute()
-                        logger.info(f"Created inventory record for item {item_id}")
-                        successful_items += 1
-                    except Exception as e:
-                        logger.error(f"Error creating inventory record for item {item_id}: {e}")
-                        failed_items += 1
-                        continue
-
-                    # Store the Supabase item_id separately without overwriting the integer item_id
-                    item["_supabase_item_id"] = str(item_id)
-
-                except Exception as e:
-                    logger.error(f"Error processing item {idx}: {e}")
-                    failed_items += 1
-                    continue
-
-            # Update import batch status
-            try:
-                self.supabase.table("import_batches").update({
-                    "status": "success" if failed_items == 0 else "partial",
-                    "successful_rows": successful_items,
-                    "failed_rows": failed_items
-                }).eq("import_batch_id", import_batch_id).execute()
-                logger.info(f"Updated import batch {import_batch_id}: {successful_items} successful, {failed_items} failed")
-            except Exception as e:
-                logger.error(f"Error updating import batch status: {e}")
-
-        except Exception as e:
-            logger.error(f"Error in Supabase store create: {e}")
-
-        # Store analysis record in memory for now (could also persist this)
-        record = AnalysisRecord(
-            dataset_summary=dataset_summary,
-            kpi_summary=kpi_summary,
-            items=items,
-        )
-
-        # For now, return the analysis_id - in a full implementation, 
-        # you'd want to persist the analysis metadata too
         return analysis_id
 
     def get(self, analysis_id: str) -> AnalysisRecord:
-        # For now, this is a placeholder - you'd need to implement 
-        # retrieving analysis data from the database
-        # This would involve querying the item_decision_metrics view
-        raise NotImplementedError("Supabase store get method not fully implemented")
+        run_result = self.supabase.table("analysis_runs").select("*").eq("analysis_id", analysis_id).execute()
+        if not run_result.data:
+            raise KeyError(f"Unknown analysis_id: {analysis_id}")
+
+        item_result = (
+            self.supabase.table("analysis_item_results")
+            .select("*")
+            .eq("analysis_id", analysis_id)
+            .execute()
+        )
+        items = [
+            _analysis_item_from_result(row)
+            for row in sorted(item_result.data, key=lambda row: int(row["rank_position"]))
+        ]
+        analysis_run = run_result.data[0]
+        dataset_summary = {
+            "row_count": int(analysis_run["observation_count"]),
+            "item_count": int(analysis_run["item_count"]),
+            "date_range": {
+                "start": analysis_run.get("date_range_start"),
+                "end": analysis_run.get("date_range_end"),
+            },
+        }
+        return AnalysisRecord(
+            dataset_summary=dataset_summary,
+            kpi_summary=build_kpi_summary(items),
+            items=items,
+        )
+
+    def get_latest_analysis_id(self) -> str:
+        result = (
+            self.supabase.table("analysis_runs")
+            .select("analysis_id")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            raise KeyError("No analysis snapshots found.")
+        return str(result.data[0]["analysis_id"])
 
     def get_item(self, analysis_id: str, item_id: int) -> dict:
         # Query the item_decision_metrics view for the specific item
@@ -193,3 +372,53 @@ class SupabaseAnalysisStore:
     def update(self, analysis_id: str, dataset_summary: dict, kpi_summary: dict, items: list[dict]) -> AnalysisRecord:
         # Placeholder - would need to implement update logic
         raise NotImplementedError("Supabase store update method not implemented")
+
+
+def _normalize_optional_text(value) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _identity_value(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def _same_item_identity(existing_item: dict, item_identity: dict) -> bool:
+    return (
+        _identity_value(existing_item.get("item_name")) == _identity_value(item_identity.get("item_name"))
+        and _identity_value(existing_item.get("unit")) == _identity_value(item_identity.get("unit"))
+        and _identity_value(existing_item.get("category")) == _identity_value(item_identity.get("category"))
+        and _identity_value(existing_item.get("subcategory")) == _identity_value(item_identity.get("subcategory"))
+        and _identity_value(existing_item.get("supplier_id")) == _identity_value(item_identity.get("supplier_id"))
+    )
+
+
+def _analysis_item_from_result(row: dict) -> dict:
+    return {
+        "item_id": int(row["app_item_id"]),
+        "date": str(row["latest_record_date"]),
+        "item_name": row["item_name"],
+        "category": row.get("category") or "Uncategorized",
+        "subcategory": row.get("subcategory") or row.get("category") or "General",
+        "unit": row["unit"],
+        "supplier_name": row.get("supplier_name") or "Unknown",
+        "current_stock": float(row["current_stock"]),
+        "reorder_level": float(row["reorder_level"]),
+        "daily_usage": float(row["daily_usage"]),
+        "lead_time": int(row["lead_time"]),
+        "price_per_unit": float(row["price_per_unit"]),
+        "seasonal_factor": float(row["seasonal_factor"]),
+        "waste_percentage": float(row["waste_percentage"]),
+        "avg_usage_7d": float(row["avg_usage_7d"]),
+        "trend_direction": row["trend_direction"],
+        "days_of_cover": float(row["days_of_cover"]),
+        "inventory_value": float(row["inventory_value"]),
+        "estimated_waste_cost": float(row["estimated_waste_cost"]),
+        "lead_time_demand": float(row["lead_time_demand"]),
+        "stock_gap_to_lead_demand": float(row["stock_gap_to_lead_demand"]),
+        "reorder_urgency_score": int(row["reorder_urgency_score"]),
+        "waste_risk_score": int(row["waste_risk_score"]),
+        "recommended_action": row["recommended_action"],
+    }

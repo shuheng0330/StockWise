@@ -76,16 +76,14 @@ export default function ExplanationPage() {
       <NavigationBar
         onFeatureSelect={() => {}} // Not used in analysis pages
         currentAnalysisId={analysisId as string}
+        currentItemId={itemId as string}
         activeSection="explanation"
       />
 
       {showDrawer && (
         <ExplanationDrawer
           explanation={explanation}
-          onClose={() => {
-            setShowDrawer(false);
-            router.back();
-          }}
+          onClose={() => setShowDrawer(false)}
         />
       )}
 

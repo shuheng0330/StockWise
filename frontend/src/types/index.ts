@@ -5,7 +5,7 @@ export type UsagePeriod = 'daily' | 'weekly';
 export type PerishabilityLevel = 'low' | 'medium' | 'high';
 
 export interface InventoryItem {
-  item_id: string;
+  item_id: number;
   item_name: string;
   category?: string;
   subcategory?: string;
@@ -56,13 +56,13 @@ export interface SimulationRequest {
 }
 
 export interface SimulationResponse {
-  item_id: string;
+  item_id: number;
   simulated_order_qty: number;
   simulated_cash_outlay: number;
   simulated_coverage_days: number;
   simulated_inventory_value: number;
   simulated_estimated_waste_cost: number;
-  simulated_risk_change: number;
+  simulated_risk_change: 'lower_shortage_risk' | 'lower_waste_risk' | 'higher_waste_risk' | 'minimal_change';
   reorder_urgency_score: number;
   waste_risk_score: number;
   recommended_action: RecommendedAction;
@@ -72,20 +72,20 @@ export interface ExplanationRequest {
   simulated_order_qty?: number;
   simulated_cash_outlay?: number;
   simulated_coverage_days?: number;
-  simulated_risk_change?: number;
+  simulated_risk_change?: string;
 }
 
 export interface ExplanationResponse {
   source: 'mock' | 'live' | 'fallback';
   item_name: string;
   recommended_action: RecommendedAction;
-  priority_level: 'high' | 'medium' | 'low';
+  priority_level: 'HIGH' | 'MEDIUM' | 'LOW';
   short_reason: string;
   decision_explanation: string;
   tradeoff_summary: string;
   suggested_next_step: string;
   confidence_note: string;
-  warning_flag: boolean;
+  warning_flag: string;
 }
 
 export interface ManualItemInput {

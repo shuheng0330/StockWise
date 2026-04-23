@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
     Home,
@@ -12,6 +12,14 @@ import {
     Settings
 } from 'lucide-react';
 import { Button } from '@/components/common';
+import {
+    getLatestAnalysisId,
+    hydrateLatestAnalysisId,
+    saveLatestAnalysisId,
+    subscribeToLatestAnalysisId,
+} from '@/lib/analysisSession';
+import { buildAnalysisNavigationTargets } from '@/lib/navigationTargets';
+import { apiClient } from '@/services/api';
 
 interface NavItemProps {
     icon: React.ReactNode;
@@ -63,10 +71,49 @@ function NavItem({ icon, label, href, onClick, disabled, active }: NavItemProps)
 interface NavigationBarProps {
     onFeatureSelect: (feature: 'upload' | 'manual') => void;
     currentAnalysisId?: string;
+    currentItemId?: string | number;
     activeSection?: string;
 }
 
-export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSection }: NavigationBarProps) {
+export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemId, activeSection }: NavigationBarProps) {
+    const [storedAnalysisId, setStoredAnalysisId] = useState<string | null>(null);
+    const activeAnalysisId = currentAnalysisId || storedAnalysisId || undefined;
+    const navigationTargets = buildAnalysisNavigationTargets(activeAnalysisId, currentItemId);
+
+    useEffect(() => {
+        let isMounted = true;
+        setStoredAnalysisId(getLatestAnalysisId());
+        const unsubscribe = subscribeToLatestAnalysisId(setStoredAnalysisId);
+
+        if (!currentAnalysisId) {
+            hydrateLatestAnalysisId(async () => {
+                const analysis = await apiClient.getLatestAnalysis();
+                return analysis.analysis_id;
+            })
+                .then((analysisId) => {
+                    if (isMounted) {
+                        setStoredAnalysisId(analysisId);
+                    }
+                })
+                .catch(() => {
+                    if (isMounted) {
+                        setStoredAnalysisId(getLatestAnalysisId());
+                    }
+                });
+        }
+
+        return () => {
+            isMounted = false;
+            unsubscribe();
+        };
+    }, [currentAnalysisId]);
+
+    useEffect(() => {
+        if (currentAnalysisId) {
+            saveLatestAnalysisId(currentAnalysisId);
+        }
+    }, [currentAnalysisId]);
+
     return (
         <nav className="bg-white border-b border-gray-200 shadow-sm">
             <div className="max-w-7xl mx-auto px-4 md:px-8">
@@ -117,8 +164,8 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                         <NavItem
                             icon={<BarChart3 className="w-5 h-5" />}
                             label="Analysis"
-                            href={currentAnalysisId ? `/dashboard/${currentAnalysisId}` : undefined}
-                            disabled={!currentAnalysisId}
+                            href={navigationTargets.analysisHref}
+                            disabled={!navigationTargets.analysisHref}
                             active={activeSection === 'dashboard'}
                         />
 
@@ -126,8 +173,8 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                         <NavItem
                             icon={<FileCheck className="w-5 h-5" />}
                             label="Records"
-                            href={currentAnalysisId ? `/records/${currentAnalysisId}` : undefined}
-                            disabled={!currentAnalysisId}
+                            href={navigationTargets.recordsHref}
+                            disabled={!navigationTargets.recordsHref}
                             active={activeSection === 'records'}
                         />
 
@@ -135,8 +182,8 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                         <NavItem
                             icon={<TrendingUp className="w-5 h-5" />}
                             label="Simulation"
-                            href={currentAnalysisId ? `/dashboard/${currentAnalysisId}` : undefined}
-                            disabled={!currentAnalysisId}
+                            href={navigationTargets.simulationHref}
+                            disabled={!navigationTargets.simulationHref}
                             active={activeSection === 'simulation'}
                         />
 
@@ -144,8 +191,8 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, activeSectio
                         <NavItem
                             icon={<MessageSquare className="w-5 h-5" />}
                             label="Explanations"
-                            href={currentAnalysisId ? `/dashboard/${currentAnalysisId}` : undefined}
-                            disabled={!currentAnalysisId}
+                            href={navigationTargets.explanationHref}
+                            disabled={!navigationTargets.explanationHref}
                             active={activeSection === 'explanation'}
                         />
 

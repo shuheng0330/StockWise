@@ -4,6 +4,8 @@ import { Button, Card, Alert } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { ItemSimulation } from '@/components/ItemSimulation';
 import { apiClient } from '@/services/api';
+import { findInventoryItemByRouteId } from '@/lib/itemIdentity';
+import { buildSimulatedExplanationHref, runSimulationAndStore } from '@/lib/simulationFlow';
 import { InventoryItem, SimulationResponse } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
@@ -29,7 +31,7 @@ export default function SimulationPage() {
 
     try {
       const analysis = await apiClient.getAnalysis(analysisId as string);
-      const foundItem = analysis.items.find((i) => i.item_id === itemId);
+      const foundItem = findInventoryItemByRouteId(analysis.items, itemId);
 
       if (!foundItem) {
         setError('Item not found');
@@ -51,13 +53,18 @@ export default function SimulationPage() {
     setIsSimulating(true);
 
     try {
-      const result = await apiClient.simulate(
-        analysisId as string,
-        itemId as string,
-        { simulated_order_qty: qty }
+      const result = await runSimulationAndStore(
+        qty,
+        (simulatedOrderQty) =>
+          apiClient.simulate(
+            analysisId as string,
+            itemId as string,
+            { simulated_order_qty: simulatedOrderQty }
+          ),
+        setSimulationResult
       );
-      setSimulationResult(result);
       toast.success('Simulation completed');
+      return result;
     } catch (err: any) {
       const message = err.response?.data?.message || err.message || 'Simulation failed';
       toast.error(message);
@@ -99,6 +106,7 @@ export default function SimulationPage() {
       <NavigationBar
         onFeatureSelect={() => {}} // Not used in analysis pages
         currentAnalysisId={analysisId as string}
+        currentItemId={itemId as string}
         activeSection="simulation"
       />
 
@@ -130,7 +138,7 @@ export default function SimulationPage() {
 
         {simulationResult && (
           <div className="mt-6">
-            <Link href={`/explanation/${analysisId}/${itemId}?simulated=${simulationResult.simulated_order_qty}`}>
+            <Link href={buildSimulatedExplanationHref(analysisId, itemId, simulationResult.simulated_order_qty)}>
               <Button variant="primary" size="lg" className="w-full">
                 Get Explanation for Simulated Result
               </Button>

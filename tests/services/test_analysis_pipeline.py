@@ -149,6 +149,23 @@ def test_simulation_recomputes_metrics_and_keeps_action_payload():
     }
 
 
+def test_simulation_derives_score_context_when_restored_snapshot_omits_internal_context():
+    ranked = build_ranked_analysis(_normalized_items())
+    paneer = next(item for item in ranked if item["item_name"] == "Paneer")
+    restored_item = {key: value for key, value in paneer.items() if key != "_score_context"}
+
+    simulated = simulate_item_quantity(restored_item, simulated_order_qty=3.0)
+
+    assert simulated["item_id"] == paneer["item_id"]
+    assert simulated["simulated_order_qty"] == 3.0
+    assert simulated["recommended_action"] in {
+        "RESTOCK_NOW",
+        "BUY_LESS",
+        "DELAY_PURCHASE",
+        "MONITOR_CLOSELY",
+    }
+
+
 def test_smaller_simulated_order_reduces_cash_exposure_for_risky_item():
     ranked = build_ranked_analysis(_normalized_items())
     paneer = next(item for item in ranked if item["item_name"] == "Paneer")

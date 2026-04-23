@@ -1,11 +1,13 @@
 from dataclasses import asdict, is_dataclass
 from datetime import date
 import os
+from queue import Empty, Queue
+from threading import Thread
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from supabase import create_client, Client
+from supabase import Client, ClientOptions, create_client
 from dotenv import load_dotenv
 
 from stockwise_api.schemas import (
@@ -61,6 +63,10 @@ def _safe_error(
 
 def _analysis_payload(store, analysis_id: str) -> dict:
     record = store.get(analysis_id)
+    return _analysis_record_payload(analysis_id, record)
+
+
+def _analysis_record_payload(analysis_id: str, record) -> dict:
     return {
         "analysis_id": analysis_id,
         "dataset_summary": record.dataset_summary,
@@ -71,12 +77,47 @@ def _analysis_payload(store, analysis_id: str) -> dict:
 
 def _records_payload(store, analysis_id: str) -> dict:
     record = store.get(analysis_id)
+    return _records_payload_from_record(analysis_id, record)
+
+
+def _records_payload_from_record(analysis_id: str, record) -> dict:
     return {
         "analysis_id": analysis_id,
         "dataset_summary": record.dataset_summary,
         "kpi_summary": record.kpi_summary,
         "items": [item_to_record_view(item) for item in record.items],
     }
+
+
+def _load_analysis_record(app: FastAPI, analysis_id: str):
+    try:
+        return app.state.store.get(analysis_id)
+    except KeyError:
+        pass
+
+    supabase_store = app.state.supabase_store
+    if supabase_store is not None and hasattr(supabase_store, "get"):
+        try:
+            analysis = supabase_store.get(analysis_id)
+            app.state.store.create(
+                dataset_summary=analysis.dataset_summary,
+                kpi_summary=analysis.kpi_summary,
+                items=analysis.items,
+                analysis_id=analysis_id,
+            )
+            return analysis
+        except Exception:
+            pass
+
+    raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found.")
+
+
+def _load_analysis_item(app: FastAPI, analysis_id: str, item_id: int) -> dict:
+    record = _load_analysis_record(app, analysis_id)
+    for item in record.items:
+        if int(item["item_id"]) == int(item_id):
+            return item
+    raise HTTPException(status_code=404, detail=f"Unknown item_id: {item_id}")
 
 
 def _date_range_from_manual_items(items: list[dict]) -> dict:
@@ -90,37 +131,173 @@ def _date_range_from_manual_items(items: list[dict]) -> dict:
 
 def _save_analysis(
     store,
-    supabase_store,
     items: list[dict],
     dataset_summary: dict,
     analysis_id: str | None = None,
+    *,
+    supabase_store=None,
+    source_type: str | None = None,
+    import_batch_id: str | None = None,
 ) -> str:
     ranked_items = build_ranked_analysis(items)
     kpis = build_kpi_summary(ranked_items)
     if analysis_id is None:
-        # Save to both stores
+        snapshot_id = None
+        if supabase_store is not None and hasattr(supabase_store, "create_analysis_snapshot"):
+            try:
+                snapshot_id = _run_optional_supabase_operation(
+                    "create-analysis-snapshot",
+                    lambda: supabase_store.create_analysis_snapshot(
+                        dataset_summary=dataset_summary,
+                        ranked_items=ranked_items,
+                        source_type=source_type or "manual",
+                        import_batch_id=import_batch_id,
+                    ),
+                    lambda: None,
+                )
+            except Exception as exc:
+                print(f"Failed to persist analysis snapshot to Supabase: {type(exc).__name__}: {exc}")
         analysis_id = store.create(
-            dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items
-        )
-        try:
-            supabase_store.create(
-                dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items
-            )
-        except Exception as e:
-            # Log error but don't fail the request
-            print(f"Failed to save to Supabase: {e}")
-    else:
-        store.update(
-            analysis_id=analysis_id,
             dataset_summary=dataset_summary,
             kpi_summary=kpis,
             items=ranked_items,
+            analysis_id=snapshot_id,
         )
-        # Note: Supabase update not implemented yet
+    else:
+        store.update(analysis_id=analysis_id, dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items)
     return analysis_id
 
 
-def create_app(glm_provider=None) -> FastAPI:
+def _supabase_enabled(enable_supabase: bool | None) -> bool:
+    if enable_supabase is not None:
+        return enable_supabase
+
+    flag = os.getenv("STOCKWISE_SUPABASE_ENABLED")
+    if flag is not None:
+        return flag.strip().lower() not in {"0", "false", "no", "off"}
+
+    return bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+
+
+def _env_float(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        return float(raw_value)
+    except ValueError:
+        print(f"Ignoring invalid {name} value: {raw_value!r}")
+        return default
+
+
+def _supabase_operation_timeout_seconds() -> float:
+    return max(_env_float("STOCKWISE_SUPABASE_OPERATION_TIMEOUT_SECONDS", 5.0), 0.0)
+
+
+def _supabase_http_timeout_seconds() -> float:
+    return max(_env_float("STOCKWISE_SUPABASE_HTTP_TIMEOUT_SECONDS", 5.0), 0.1)
+
+
+def _run_optional_supabase_operation(operation_name: str, operation, fallback):
+    timeout_seconds = _supabase_operation_timeout_seconds()
+    if timeout_seconds <= 0:
+        return operation()
+
+    result_queue: Queue = Queue(maxsize=1)
+
+    def run_operation() -> None:
+        try:
+            result_queue.put((True, operation()))
+        except Exception as exc:
+            result_queue.put((False, exc))
+
+    Thread(
+        target=run_operation,
+        name=f"stockwise-supabase-{operation_name}",
+        daemon=True,
+    ).start()
+
+    try:
+        success, result = result_queue.get(timeout=timeout_seconds)
+    except Empty:
+        print(
+            f"Timed out waiting {timeout_seconds:g}s for Supabase {operation_name}; "
+            "continuing without blocking the upload response."
+        )
+        fallback_result = fallback()
+        if isinstance(fallback_result, dict):
+            fallback_result["_timed_out"] = True
+        return fallback_result
+
+    if success:
+        return result
+    raise result
+
+
+def _build_supabase_store(enable_supabase: bool | None):
+    if not _supabase_enabled(enable_supabase):
+        return None
+
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        print("Supabase persistence is enabled but SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.")
+        return None
+
+    supabase_client: Client = create_client(
+        supabase_url=supabase_url,
+        supabase_key=supabase_key,
+        options=ClientOptions(postgrest_client_timeout=_supabase_http_timeout_seconds()),
+    )
+    return SupabaseAnalysisStore(supabase_client)
+
+
+def _persist_observations(
+    supabase_store,
+    observations: list[dict],
+    *,
+    source_type: str,
+    file_name: str | None = None,
+    file_type: str | None = None,
+) -> dict:
+    if supabase_store is None:
+        return {"import_batch_id": None, "successful_rows": 0, "failed_rows": 0}
+
+    try:
+        fallback_result = {"import_batch_id": None, "successful_rows": 0, "failed_rows": len(observations)}
+        result = _run_optional_supabase_operation(
+            "persist-observations",
+            lambda: supabase_store.persist_observations(
+                observations,
+                source_type=source_type,
+                file_name=file_name,
+                file_type=file_type,
+            ),
+            lambda: fallback_result.copy(),
+        )
+        return result or {"import_batch_id": None, "successful_rows": len(observations), "failed_rows": 0}
+    except Exception as exc:
+        print(f"Failed to persist observations to Supabase: {type(exc).__name__}: {exc}")
+        return {"import_batch_id": None, "successful_rows": 0, "failed_rows": len(observations)}
+
+
+def _attach_supabase_record_links(items: list[dict], persistence_result: dict) -> list[dict]:
+    latest_records = persistence_result.get("latest_records_by_history_identity") or {}
+    if not latest_records:
+        return items
+
+    linked_items = []
+    for item in items:
+        linked_item = dict(item)
+        latest_record = latest_records.get(item.get("_history_identity"))
+        if latest_record:
+            linked_item["_supabase_item_id"] = latest_record.get("item_id")
+            linked_item["_latest_record_id"] = latest_record.get("record_id")
+        linked_items.append(linked_item)
+    return linked_items
+
+
+def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | None = None) -> FastAPI:
     load_dotenv()  # Load environment variables from .env file
 
     app = FastAPI(title="StockWise Backend", version="0.1.0")
@@ -140,14 +317,8 @@ def create_app(glm_provider=None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Initialize Supabase client
-    app.state.supabase: Client = create_client(
-        supabase_url=os.getenv("SUPABASE_URL"),
-        supabase_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
-    )
-
     app.state.store = InMemoryAnalysisStore()
-    app.state.supabase_store = SupabaseAnalysisStore(app.state.supabase)
+    app.state.supabase_store = supabase_store if supabase_store is not None else _build_supabase_store(enable_supabase)
     app.state.glm_provider = glm_provider or provider_from_env()
 
     @app.exception_handler(ValidationError)
@@ -166,61 +337,86 @@ def create_app(glm_provider=None) -> FastAPI:
     ):
         return _safe_error(400, "explanation_validation_error", str(exc))
 
+    @app.get("/api/v1/analyses/latest", response_model=AnalysisResponse)
+    async def get_latest_analysis():
+        supabase_store = app.state.supabase_store
+        if supabase_store is None or not hasattr(supabase_store, "get_latest_analysis_id"):
+            raise HTTPException(status_code=404, detail="No saved analysis found.")
+
+        try:
+            analysis_id = supabase_store.get_latest_analysis_id()
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="No saved analysis found.") from exc
+
+        analysis = _load_analysis_record(app, analysis_id)
+        return _analysis_record_payload(analysis_id, analysis)
+
     # GET endpoint added by teammate 2 (frontend needs this)
     @app.get("/api/v1/analyses/{analysis_id}", response_model=AnalysisResponse)
     async def get_analysis(analysis_id: str):
-        analysis = app.state.store.get(analysis_id)
-        if not analysis:
-            raise HTTPException(
-                status_code=404, detail=f"Analysis {analysis_id} not found."
-            )
-        return _analysis_payload(app.state.store, analysis_id)
+        analysis = _load_analysis_record(app, analysis_id)
+        return _analysis_record_payload(analysis_id, analysis)
 
     @app.post("/api/v1/analyses", response_model=AnalysisResponse)
     async def create_analysis(file: UploadFile = File(...)):
         raw = await file.read()
         validated_rows, summary = validate_inventory_csv(raw)
-        normalized_items = normalize_item_history(
-            validated_rows, preserve_item_ids=True
+        persistence_result = _persist_observations(
+            app.state.supabase_store,
+            validated_rows,
+            source_type="import",
+            file_name=file.filename,
+            file_type="csv",
         )
+        normalized_items = normalize_item_history(validated_rows, preserve_item_ids=True)
+        normalized_items = _attach_supabase_record_links(normalized_items, persistence_result)
         dataset_summary = asdict(summary)
         dataset_summary["item_count"] = len(normalized_items)
+        supabase_store_for_snapshot = None if persistence_result.get("_timed_out") else app.state.supabase_store
         analysis_id = _save_analysis(
-            app.state.store, app.state.supabase_store, normalized_items, dataset_summary
+            app.state.store,
+            normalized_items,
+            dataset_summary,
+            supabase_store=supabase_store_for_snapshot,
+            source_type="import",
+            import_batch_id=persistence_result.get("import_batch_id"),
         )
         return _analysis_payload(app.state.store, analysis_id)
 
     @app.post("/api/v1/manual-analyses", response_model=AnalysisResponse)
     async def create_manual_analysis(request: ManualAnalysisRequest):
         raw_items = [item.model_dump() for item in request.items]
+        persistence_result = _persist_observations(
+            app.state.supabase_store,
+            raw_items,
+            source_type="manual",
+        )
         normalized_items = normalize_item_history(raw_items, preserve_item_ids=True)
+        normalized_items = _attach_supabase_record_links(normalized_items, persistence_result)
         dataset_summary = {
             "row_count": len(raw_items),
             "item_count": len(normalized_items),
             "date_range": _date_range_from_manual_items(raw_items),
         }
+        supabase_store_for_snapshot = None if persistence_result.get("_timed_out") else app.state.supabase_store
         analysis_id = _save_analysis(
-            app.state.store, app.state.supabase_store, normalized_items, dataset_summary
+            app.state.store,
+            normalized_items,
+            dataset_summary,
+            supabase_store=supabase_store_for_snapshot,
+            source_type="manual",
+            import_batch_id=persistence_result.get("import_batch_id"),
         )
         return _analysis_payload(app.state.store, analysis_id)
 
     @app.get("/api/v1/analyses/{analysis_id}/records", response_model=RecordsResponse)
     async def get_records(analysis_id: str):
-        try:
-            return _records_payload(app.state.store, analysis_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        analysis = _load_analysis_record(app, analysis_id)
+        return _records_payload_from_record(analysis_id, analysis)
 
-    @app.post(
-        "/api/v1/analyses/{analysis_id}/items/{item_id}/simulate",
-        response_model=SimulationResponse,
-    )
-    async def simulate_item(analysis_id: str, item_id: str, request: SimulationRequest):
-        try:
-            # Convert item_id to int for store lookup
-            item = app.state.store.get_item(analysis_id, int(item_id))
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/simulate", response_model=SimulationResponse)
+    async def simulate_item(analysis_id: str, item_id: int, request: SimulationRequest):
+        item = _load_analysis_item(app, analysis_id, item_id)
         simulated = simulate_item_quantity(item, request.simulated_order_qty)
         return simulated
 

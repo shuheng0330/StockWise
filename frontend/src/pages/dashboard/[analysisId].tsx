@@ -4,6 +4,7 @@ import { Search, Filter, TrendingUp, AlertCircle, DollarSign, Percent } from 'lu
 import { Button, Card, Input, Alert } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
+import { saveLatestAnalysisId } from '@/lib/analysisSession';
 import { AnalysisResponse, InventoryItem, RecommendedAction } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
@@ -31,6 +32,7 @@ export default function Dashboard() {
     try {
       const response = await apiClient.getAnalysis(analysisId as string);
       setAnalysis(response);
+      saveLatestAnalysisId(response.analysis_id);
     } catch (err: any) {
       const message = err.response?.data?.message || err.message || 'Failed to fetch analysis';
       setError(message);

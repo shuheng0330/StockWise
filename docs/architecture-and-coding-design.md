@@ -33,6 +33,7 @@
 - `src/stockwise_api/services/validation.py` maps raw CSV headers into canonical field names, validates required and optional fields, and produces a canonical payload.
 - `src/stockwise_api/services/manual_input.py` normalizes canonical payloads into the internal analysis shape used by metrics and recommendations.
 - CSV uploads and manual analysis requests are treated as observation streams before scoring.
+- Validated source observations are offered to Supabase persistence before they are collapsed into latest item-level analysis rows.
 - Observation streams collapse into one latest internal item per item identity before the recommendation engine runs.
 - Both entry modes must reach the recommendation engine through this same validation and normalization flow.
 - Required score-driving inputs are enforced at the canonical schema layer so the recommendation engine does not depend on fallback guesses for price or seasonality.
@@ -71,6 +72,28 @@
 - The grouped output preserves the first stable `item_id` for records, simulation, and explanation endpoints.
 - `avg_usage_7d` is computed from up to the seven most recent observations in the group.
 - `trend_direction` is computed from first-vs-latest usage in that recent window.
+
+## Supabase Persistence Flow
+- `src/stockwise_api/store.py` contains `SupabaseAnalysisStore.persist_observations`.
+- `POST /api/v1/analyses` passes validated CSV rows to `persist_observations` with `source_type = import`, `file_name`, and `file_type = csv`.
+- `POST /api/v1/manual-analyses` passes submitted manual rows to `persist_observations` with `source_type = manual`.
+- Persistence normalizes each source observation through the same canonical manual normalization path used by analysis.
+- Import persistence creates one `import_batches` row before row inserts and updates it to `success`, `partial`, or `failed`.
+- Each persisted observation creates one `inventory_records` row; historical CSVs therefore store all source rows, not just grouped latest rows.
+- Import row persistence failures are recorded in `import_row_errors` when an import batch exists.
+- Suppliers are matched or inserted by `supplier_name`; normalized missing or `Unknown` suppliers remain nullable.
+- Items are matched by `item_name`, `unit`, `category`, `subcategory`, and `supplier_id` to avoid merging different owner-facing items with the same name.
+- Supabase writes are best-effort for the MVP. Analysis responses are still generated from the deterministic in-memory analysis record if persistence fails.
+
+## Supabase Analysis Snapshot Flow
+- Migration file: `supabase/migrations/202604220001_create_analysis_snapshots.sql`.
+- `analysis_runs` stores one row per analysis and owns the API-level `analysis_id` when Supabase snapshots are enabled.
+- `analysis_item_results` stores the ranked point-in-time recommendation rows for each analysis.
+- `analysis_item_results.app_item_id` preserves the current frontend/API integer item ID used by records, simulation, and explanation routes.
+- `analysis_item_results.item_id` and `latest_record_id` link to Supabase `items` and `inventory_records` when observation persistence returns those IDs; both remain nullable for offline/test paths.
+- API create endpoints persist observations, collapse and rank the analysis, then persist an analysis snapshot and use the returned `analysis_id` in the in-memory cache.
+- `GET /api/v1/analyses/{analysis_id}` reads from the in-memory cache first, then falls back to `SupabaseAnalysisStore.get`.
+- To apply schema changes to the live Supabase project, run `supabase link --project-ref fujcmskmahkvyulzxvuy` and `supabase db push` after reviewing the migration.
 
 ## Metrics and Thresholds
 - `days_of_cover`
@@ -115,6 +138,7 @@
 
 ## Runtime Notes
 - App factory: `stockwise_api.api.app:create_app`
+- `create_app` accepts an injectable `supabase_store` for tests and local integration seams.
 - Default provider mode: `mock`
 - Live provider fails fast at startup if `GLM_MODE=live` and `ZAI_API_KEY` is missing
 - CSV uploads preserve source `item_id` values when present and collapse repeated historical observations into one latest item per source item.
@@ -124,6 +148,9 @@
 - Record payloads expose `price_per_unit` and `seasonal_factor` as non-null score-driving inputs
 
 ## Environment Variables
+- `STOCKWISE_SUPABASE_ENABLED=true|false`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
 - `GLM_MODE=mock|live`
 - `ZAI_API_KEY`
 - `ZAI_BASE_URL`

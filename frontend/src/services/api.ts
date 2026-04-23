@@ -34,9 +34,7 @@ class ApiClient {
   }
 
   async createManualAnalysis(items: ManualItemInput[]): Promise<AnalysisResponse> {
-    // Backend expects an object with `items: [...]` not a bare array
-    const payload = { items };
-    const response = await this.client.post('/api/v1/manual-analyses', payload);
+    const response = await this.client.post('/api/v1/manual-analyses', { items });
     return response.data;
   }
 
@@ -45,12 +43,17 @@ class ApiClient {
     return response.data;
   }
 
+  async getLatestAnalysis(): Promise<AnalysisResponse> {
+    const response = await this.client.get('/api/v1/analyses/latest');
+    return response.data;
+  }
+
   async getRecords(analysisId: string): Promise<any> {
     const response = await this.client.get(`/api/v1/analyses/${analysisId}/records`);
     return response.data;
   }
 
-  async updateRecord(analysisId: string, itemId: string, data: Partial<ManualItemInput>): Promise<any> {
+  async updateRecord(analysisId: string, itemId: string | number, data: Partial<ManualItemInput>): Promise<any> {
     const response = await this.client.patch(
       `/api/v1/analyses/${analysisId}/items/${itemId}`,
       data
@@ -58,13 +61,13 @@ class ApiClient {
     return response.data;
   }
 
-  async deleteRecord(analysisId: string, itemId: string): Promise<void> {
+  async deleteRecord(analysisId: string, itemId: string | number): Promise<void> {
     await this.client.delete(`/api/v1/analyses/${analysisId}/items/${itemId}`);
   }
 
   async simulate(
     analysisId: string,
-    itemId: string,
+    itemId: string | number,
     request: SimulationRequest
   ): Promise<SimulationResponse> {
     const response = await this.client.post(
@@ -76,7 +79,7 @@ class ApiClient {
 
   async getExplanation(
     analysisId: string,
-    itemId: string,
+    itemId: string | number,
     request?: ExplanationRequest
   ): Promise<ExplanationResponse> {
     const response = await this.client.post(

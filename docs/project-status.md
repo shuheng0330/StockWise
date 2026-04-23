@@ -1,7 +1,7 @@
 # StockWise Project Status
 
 ## Date
-- 2026-04-20
+- 2026-04-22
 
 ## Completed
 - Revised PRD and SAD created.
@@ -20,8 +20,17 @@
 - Frontend page and field requirements documented in `docs/frontend-pages-and-fields.md`.
 - Historical CSV uploads now collapse repeated observations into latest item-level recommendations with real recent usage averages and trend direction.
 - Manual analysis requests now support repeated dated entries for the same owner-facing item, preserving the friendly daily-entry flow while building trend-aware history.
+- Supabase persistence now stores source observations before analysis collapse, so historical CSV uploads persist every validated row in `inventory_records`.
+- CSV imports now create/update `import_batches`; row-level persistence failures can be written to `import_row_errors`.
+- Manual observations now persist as `input_source = manual` without an import batch, while CSV observations persist as `input_source = import`.
+- Supabase item matching now uses owner-facing identity fields instead of item name only.
+- Explanation generation now uses the in-memory analysis item first, so Supabase network issues do not break explanation responses for the current analysis.
+- Frontend manual analysis requests now send the backend contract shape `{ items: [...] }`.
+- Supabase migration added for `analysis_runs` and `analysis_item_results`.
+- Supabase analysis snapshots now use `analysis_runs.analysis_id` as the API `analysis_id` when snapshot persistence is enabled.
+- `GET /api/v1/analyses/{analysis_id}` now falls back to Supabase snapshots after an in-memory cache miss.
 - Automated tests added for services and API routes.
-- Documentation updated to reflect the shared input contract, CSV compatibility behavior, and observation-history normalization.
+- Documentation updated to reflect the shared input contract, CSV compatibility behavior, observation-history normalization, and Supabase persistence behavior.
 
 ## In Progress
 - Waiting for real `ZAI_API_KEY` to verify live provider against Z.AI.
@@ -31,9 +40,9 @@
 - Real `ZAI_API_KEY` has not been received yet, so live Z.AI integration cannot be verified.
 
 ## Next
-- Integrate the frontend against the three backend endpoints.
-- Integrate the frontend entry page against both CSV upload and manual entry endpoints.
-- Integrate the records page against records/read-update-delete endpoints.
+- Review and apply `supabase/migrations/202604220001_create_analysis_snapshots.sql` to the live Supabase project with `supabase db push`.
+- Add authenticated `created_by` / `uploaded_by` wiring once Supabase auth/profile flow is connected.
+- Verify read-after-restart behavior against the live Supabase project after migration push.
 - Keep `docs/` in sync whenever schema, validation, or scoring inputs change.
 - When the real key arrives, verify `GLM_MODE=live` with the production request path.
 - Expand tests once real Z.AI response shape is confirmed.
