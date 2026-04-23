@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import {
     Home,
     Upload,
@@ -9,7 +10,8 @@ import {
     TrendingUp,
     MessageSquare,
     Database,
-    Settings
+    Settings,
+    LogOut
 } from 'lucide-react';
 import { Button } from '@/components/common';
 import {
@@ -20,6 +22,7 @@ import {
 } from '@/lib/analysisSession';
 import { buildAnalysisNavigationTargets } from '@/lib/navigationTargets';
 import { apiClient } from '@/services/api';
+import { useAuth } from '@/lib/auth';
 
 interface NavItemProps {
     icon: React.ReactNode;
@@ -76,9 +79,16 @@ interface NavigationBarProps {
 }
 
 export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemId, activeSection }: NavigationBarProps) {
+    const router = useRouter();
+    const { signOut } = useAuth();
     const [storedAnalysisId, setStoredAnalysisId] = useState<string | null>(null);
     const activeAnalysisId = currentAnalysisId || storedAnalysisId || undefined;
     const navigationTargets = buildAnalysisNavigationTargets(activeAnalysisId, currentItemId);
+
+    const handleLogout = async () => {
+        await signOut();
+        router.push('/login');
+    };
 
     useEffect(() => {
         let isMounted = true;
@@ -211,6 +221,15 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                             href="/settings"
                             active={activeSection === 'settings'}
                         />
+
+                        {/* Logout */}
+                        <button
+                            onClick={handleLogout}
+                            className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium"
+                        >
+                            <LogOut className="w-5 h-5" />
+                            Logout
+                        </button>
                     </div>
                 </div>
             </div>
