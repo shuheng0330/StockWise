@@ -4,7 +4,7 @@ import { Search, Filter, TrendingUp, AlertCircle, DollarSign, Percent } from 'lu
 import { Button, Card, Input, Alert } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
-import { saveLatestAnalysisId } from '@/lib/analysisSession';
+import { recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { AnalysisResponse, InventoryItem, RecommendedAction } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
@@ -33,6 +33,10 @@ export default function Dashboard() {
       const response = await apiClient.getAnalysis(analysisId as string);
       setAnalysis(response);
       saveLatestAnalysisId(response.analysis_id);
+      recordAnalysisInHistory({
+        analysisId: response.analysis_id,
+        label: `${response.items.length} items · ${response.kpi_summary.restock_now_count} to restock`,
+      });
     } catch (err: any) {
       const message = err.response?.data?.message || err.message || 'Failed to fetch analysis';
       setError(message);
@@ -104,14 +108,17 @@ export default function Dashboard() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 md:px-8 py-6">
-          <div className="flex justify-between items-start mb-6">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Analysis Dashboard</h1>
-              <p className="text-gray-600 mt-1">Analysis ID: {analysisId}</p>
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
+            <div className="min-w-0">
+              <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Analysis Dashboard</h1>
+              <p className="text-gray-600 mt-1 text-sm md:text-base break-all">Analysis ID: {analysisId}</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Link href={`/records/${analysisId}`}>
                 <Button variant="secondary">Review Records</Button>
+              </Link>
+              <Link href={`/export/${analysisId}`}>
+                <Button variant="secondary">Export</Button>
               </Link>
               <Link href="/">
                 <Button variant="outline">New Analysis</Button>
@@ -120,7 +127,7 @@ export default function Dashboard() {
           </div>
 
           {/* KPI Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -223,7 +230,7 @@ export default function Dashboard() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Item</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Category</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Date</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Stock</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Days Cover</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Urgency</th>
@@ -241,7 +248,7 @@ export default function Dashboard() {
                         <p className="text-sm text-gray-600">{item.supplier_name}</p>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">{item.category || '-'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">{item.date || '-'}</td>
                     <td className="px-6 py-4 text-sm text-gray-900">
                       {item.current_stock} {item.unit}
                     </td>

@@ -7,6 +7,7 @@ export type PerishabilityLevel = 'low' | 'medium' | 'high';
 export interface InventoryItem {
   item_id: number;
   item_name: string;
+  date?: string;
   category?: string;
   subcategory?: string;
   unit: string;

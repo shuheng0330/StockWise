@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Input, Select, Button, Alert } from './common';
+import { Input, Select, Button } from './common';
 import { ManualItemInput, PerishabilityLevel, UsagePeriod } from '@/types';
 
 interface InventoryItemFormProps {
@@ -165,6 +165,7 @@ export function InventoryItemForm({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <Input
               label="Item Name *"
+              help="The display name for this inventory item (e.g., 'Fresh Milk'). Must be unique enough to identify it in reports."
               placeholder="e.g., Fresh Milk"
               value={item.item_name}
               onChange={(e) => handleItemChange(index, 'item_name', e.target.value)}
@@ -172,6 +173,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Current Stock *"
+              help="How much of this item you have in inventory right now, measured in the unit below. Used to compute days of cover and urgency."
               type="number"
               min="0"
               value={item.current_stock}
@@ -180,6 +182,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Unit *"
+              help="The unit of measure for this item (e.g., liter, kg, pieces, box). Used consistently across stock and usage."
               placeholder="e.g., liter, kg, pieces"
               value={item.unit}
               onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
@@ -187,6 +190,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Usage Value *"
+              help="Typical quantity consumed per usage period (e.g., 5 liters per day). Drives demand forecasting."
               type="number"
               step="0.01"
               min="0.01"
@@ -196,6 +200,7 @@ export function InventoryItemForm({
             />
             <Select
               label="Usage Period *"
+              help="The time window your Usage Value refers to. 'Daily' means per day; 'Weekly' means per 7 days."
               value={item.usage_period}
               onChange={(e) => handleItemChange(index, 'usage_period', e.target.value as UsagePeriod)}
               options={[
@@ -205,6 +210,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Lead Time (days) *"
+              help="Number of days between placing a replenishment order and receiving it. Longer lead times increase urgency."
               type="number"
               min="1"
               step="1"
@@ -214,6 +220,7 @@ export function InventoryItemForm({
             />
             <Input
               label="Price per Unit *"
+              help="Cost you pay per unit. Used to compute inventory value and waste cost exposure."
               type="number"
               step="0.01"
               min="0"
@@ -223,7 +230,8 @@ export function InventoryItemForm({
             />
             <Select
               label="Seasonal Factor *"
-              value={String(item.seasonal_factor)}
+              help="Multiplier applied to expected demand for seasonality. 1.0 means normal; above 1.0 means a seasonal peak; below 1.0 means a slower period."
+              value={item.seasonal_factor.toFixed(1)}
               onChange={(e) => handleItemChange(index, 'seasonal_factor', parseFloat(e.target.value) || 0)}
               options={[
                 { value: '0.8', label: '0.8 — lower demand' },
@@ -241,6 +249,7 @@ export function InventoryItemForm({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Select
                 label="Perishability Level"
+                help="How quickly this item spoils. 'Low' = dry/canned, 'Medium' = chilled, 'High' = fresh produce/dairy. Drives waste risk score."
                 value={item.perishability_level || ''}
                 onChange={(e) => handleItemChange(index, 'perishability_level', e.target.value as PerishabilityLevel)}
                 error={errors[`${index}-perishability_level`]}
@@ -252,6 +261,7 @@ export function InventoryItemForm({
               />
               <Input
                 label="Recent Waste Percentage"
+                help="Percentage of stock thrown away recently (0–100). Leave blank if you don't have data and use Perishability instead."
                 type="number"
                 step="0.1"
                 min="0"
@@ -271,24 +281,28 @@ export function InventoryItemForm({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input
                 label="Category"
+                help="High-level grouping for reporting (e.g., Dairy, Produce, Bakery). Useful for filtering and rollups."
                 placeholder="e.g., Dairy"
                 value={item.category || ''}
                 onChange={(e) => handleItemChange(index, 'category', e.target.value)}
               />
               <Input
                 label="Subcategory"
+                help="More specific grouping inside the Category (e.g., 'Milk Products' under 'Dairy')."
                 placeholder="e.g., Milk Products"
                 value={item.subcategory || ''}
                 onChange={(e) => handleItemChange(index, 'subcategory', e.target.value)}
               />
               <Input
                 label="Supplier Name"
+                help="Name of the vendor you order this item from. Shown on dashboards and records."
                 placeholder="e.g., Local Farmer"
                 value={item.supplier_name || ''}
                 onChange={(e) => handleItemChange(index, 'supplier_name', e.target.value)}
               />
               <Input
                 label="Manual Reorder Level"
+                help="Optional override for the reorder threshold. Leave blank to let StockWise compute it from usage and lead time."
                 type="number"
                 min="0"
                 value={item.manual_reorder_level || ''}

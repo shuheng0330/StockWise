@@ -113,9 +113,9 @@ export default function SimulationPage() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-4xl mx-auto px-4 md:px-8 py-6">
-          <div className="flex justify-between items-start">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Simulation</h1>
+              <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Simulation</h1>
               <p className="text-gray-600 mt-1">{item.item_name}</p>
             </div>
             <Link href={`/dashboard/${analysisId}`}>

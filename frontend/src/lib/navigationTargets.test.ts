@@ -7,6 +7,7 @@ describe('analysis navigation targets', () => {
       recordsHref: '/records/analysis-1',
       simulationHref: '/simulation/analysis-1/10',
       explanationHref: '/explanation/analysis-1/10',
+      exportHref: '/export/analysis-1',
     });
   });
 
@@ -16,6 +17,7 @@ describe('analysis navigation targets', () => {
       recordsHref: '/records/analysis-1',
       simulationHref: undefined,
       explanationHref: undefined,
+      exportHref: '/export/analysis-1',
     });
   });
 });
