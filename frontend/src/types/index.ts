@@ -93,6 +93,8 @@ export interface ManualItemInput {
   item_name: string;
   current_stock: number;
   unit: string;
+  custom_unit?: string;
+  date?: string;
   usage_value: number;
   usage_period: UsagePeriod;
   lead_time_days: number;

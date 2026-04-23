@@ -54,7 +54,9 @@ def _history_identity(item: dict) -> str:
     return "item:" + "|".join(identity_parts)
 
 
-def normalize_manual_items(items: list[dict], *, preserve_item_ids: bool = False) -> list[dict]:
+def normalize_manual_items(
+    items: list[dict], *, preserve_item_ids: bool = False
+) -> list[dict]:
     if not items:
         raise ManualInputValidationError("Manual entry requires at least one item.")
 
@@ -75,7 +77,9 @@ def normalize_manual_items(items: list[dict], *, preserve_item_ids: bool = False
         waste_percentage = (
             float(item["recent_waste_percentage"])
             if item.get("recent_waste_percentage") is not None
-            else PERISHABILITY_TO_WASTE.get(item.get("perishability_level") or "medium", 3.0)
+            else PERISHABILITY_TO_WASTE.get(
+                item.get("perishability_level") or "medium", 3.0
+            )
         )
         reorder_level = (
             float(item["manual_reorder_level"])
@@ -91,11 +95,17 @@ def normalize_manual_items(items: list[dict], *, preserve_item_ids: bool = False
 
         normalized.append(
             {
-                "item_id": int(item["item_id"]) if preserve_item_ids and item.get("item_id") is not None else index,
+                "item_id": (
+                    int(item["item_id"])
+                    if preserve_item_ids and item.get("item_id") is not None
+                    else index
+                ),
                 "date": item.get("date", today),
                 "item_name": str(item["item_name"]).strip(),
                 "category": str(item.get("category") or "Uncategorized").strip(),
-                "subcategory": str(item.get("subcategory") or item.get("category") or "General").strip(),
+                "subcategory": str(
+                    item.get("subcategory") or item.get("category") or "General"
+                ).strip(),
                 "unit": str(item["unit"]).strip(),
                 "supplier_name": str(item.get("supplier_name") or "Unknown").strip(),
                 "current_stock": current_stock,
@@ -115,9 +125,8 @@ def normalize_manual_items(items: list[dict], *, preserve_item_ids: bool = False
                 "usage_value": usage_value,
                 "usage_period": usage_period,
                 "lead_time_days": lead_time_days,
-                "perishability_level": item.get("perishability_level") or _infer_perishability_from_waste(
-                    item.get("recent_waste_percentage")
-                ),
+                "perishability_level": item.get("perishability_level")
+                or _infer_perishability_from_waste(item.get("recent_waste_percentage")),
                 "manual_reorder_level": item.get("manual_reorder_level"),
                 "recent_waste_percentage": item.get("recent_waste_percentage"),
                 "_history_identity": _history_identity(item),
@@ -128,18 +137,25 @@ def normalize_manual_items(items: list[dict], *, preserve_item_ids: bool = False
     return normalized
 
 
-def normalize_item_history(items: list[dict], *, preserve_item_ids: bool = False) -> list[dict]:
+def normalize_item_history(
+    items: list[dict], *, preserve_item_ids: bool = False
+) -> list[dict]:
     observations = normalize_manual_items(items, preserve_item_ids=preserve_item_ids)
     grouped_observations: OrderedDict[str, list[dict]] = OrderedDict()
 
     for observation in observations:
-        grouped_observations.setdefault(observation["_history_identity"], []).append(observation)
+        grouped_observations.setdefault(observation["_history_identity"], []).append(
+            observation
+        )
 
     latest_items: list[dict] = []
     for history in grouped_observations.values():
         sorted_history = sorted(
             history,
-            key=lambda item: (_date_sort_key(item["date"]), int(item.get("_observation_index", 0))),
+            key=lambda item: (
+                _date_sort_key(item["date"]),
+                int(item.get("_observation_index", 0)),
+            ),
         )
         latest_item = dict(sorted_history[-1])
         latest_item["item_id"] = int(sorted_history[0]["item_id"])
@@ -147,7 +163,8 @@ def normalize_item_history(items: list[dict], *, preserve_item_ids: bool = False
 
         recent_history = sorted_history[-7:]
         latest_item["avg_usage_7d"] = round(
-            sum(float(item["daily_usage"]) for item in recent_history) / len(recent_history),
+            sum(float(item["daily_usage"]) for item in recent_history)
+            / len(recent_history),
             6,
         )
         latest_item["trend_direction"] = _trend_direction(
@@ -180,7 +197,8 @@ def item_to_record_view(item: dict) -> dict:
         "category": item.get("category"),
         "subcategory": item.get("subcategory"),
         "supplier_name": item.get("supplier_name"),
-        "perishability_level": item.get("perishability_level") or _infer_perishability_from_waste(
+        "perishability_level": item.get("perishability_level")
+        or _infer_perishability_from_waste(
             item.get("recent_waste_percentage", item.get("waste_percentage"))
         ),
         "manual_reorder_level": item.get("manual_reorder_level"),

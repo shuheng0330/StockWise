@@ -10,7 +10,6 @@ import toast from 'react-hot-toast';
 export default function RecordsPage() {
   const router = useRouter();
   const { analysisId } = router.query;
-
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -41,7 +40,15 @@ export default function RecordsPage() {
 
     try {
       const response = await apiClient.getRecords(analysisId as string);
-      setItems(response.items || []);
+
+      // MAP THE DATA HERE: 
+      // This creates a 'date' property if it's missing but 'last_updated' exists
+      const normalizedItems = (response.items || []).map((item: any) => ({
+        ...item,
+        date: item.date || item.last_updated
+      }));
+
+      setItems(normalizedItems);
     } catch (err: any) {
       const message = err.response?.data?.message || err.message || 'Failed to fetch records';
       setError(message);
@@ -57,7 +64,7 @@ export default function RecordsPage() {
       item_name: item.item_name,
       current_stock: item.current_stock,
       unit: item.unit,
-      category: item.category,
+      date: item.date,
     });
   };
 
@@ -142,7 +149,7 @@ export default function RecordsPage() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Item Name</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Category</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Date</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Stock</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Unit</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Action</th>
@@ -164,8 +171,9 @@ export default function RecordsPage() {
                         </td>
                         <td className="px-6 py-4">
                           <Input
-                            value={editData.category || ''}
-                            onChange={(e) => setEditData({ ...editData, category: e.target.value })}
+                            type="date"
+                            value={editData.date || ''}
+                            onChange={(e) => setEditData({ ...editData, date: e.target.value })}
                           />
                         </td>
                         <td className="px-6 py-4">
@@ -203,7 +211,7 @@ export default function RecordsPage() {
                     ) : (
                       <>
                         <td className="px-6 py-4 font-medium text-gray-900">{item.item_name}</td>
-                        <td className="px-6 py-4 text-sm text-gray-600">{item.category || '-'}</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{item.date || '-'}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.current_stock}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.unit}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.recommended_action.replace('_', ' ')}</td>
