@@ -2,9 +2,12 @@ import pytest
 
 from stockwise_api.services.parsing import (
     ChatValidationError,
+    DecisionBriefValidationError,
     ExplanationValidationError,
+    build_fallback_decision_brief,
     build_fallback_chat_response,
     build_fallback_explanation,
+    parse_decision_brief_response,
     parse_chat_response,
     parse_explanation_response,
 )
@@ -310,3 +313,199 @@ def test_build_fallback_chat_response_returns_safe_payload():
     assert fallback["scope"] == "analysis"
     assert fallback["answer"]
     assert fallback["related_items"][0]["item_name"] == "Paneer"
+
+
+def _decision_brief_context():
+    return {
+        "allowed_item_ids": {1, 2, 3},
+        "items_by_id": {
+            1: {"item_name": "Paneer", "recommended_action": "BUY_LESS"},
+            2: {"item_name": "Eggs", "recommended_action": "RESTOCK_NOW"},
+            3: {"item_name": "Rice", "recommended_action": "DELAY_PURCHASE"},
+        },
+        "analysis": {
+            "kpi_summary": {
+                "restock_now_count": 1,
+                "buy_less_count": 1,
+                "inventory_value_at_risk": 120.0,
+            }
+        },
+        "deterministic_impact": {
+            "cash": "Delay low-risk purchases to preserve cash.",
+            "waste": "Buy less for high waste-risk items.",
+            "shortage": "Restock urgent items first.",
+        },
+    }
+
+
+def test_parse_decision_brief_response_accepts_valid_grounded_json():
+    payload = """
+    {
+      "summary": "Handle eggs first, reduce paneer purchases, and delay rice.",
+      "buy_today": [
+        {"item_id": 2, "item_name": "Eggs", "recommended_action": "RESTOCK_NOW", "reason": "Shortage risk is highest."}
+      ],
+      "buy_less": [
+        {"item_id": 1, "item_name": "Paneer", "recommended_action": "BUY_LESS", "reason": "Waste risk is elevated."}
+      ],
+      "delay": [
+        {"item_id": 3, "item_name": "Rice", "recommended_action": "DELAY_PURCHASE", "reason": "Coverage is healthy."}
+      ],
+      "estimated_impact": {
+        "cash": "Delay low-risk purchases to preserve cash.",
+        "waste": "Smaller paneer order lowers waste exposure.",
+        "shortage": "Restocking eggs lowers shortage risk."
+      },
+      "top_tradeoffs": [
+        "Restocking eggs uses cash but protects availability.",
+        "Buying less paneer lowers waste but needs monitoring."
+      ],
+      "recommended_order": [
+        "Restock eggs.",
+        "Buy less paneer.",
+        "Delay rice."
+      ],
+      "confidence_note": "Grounded in current StockWise metrics.",
+      "warning_flag": "Review records before ordering."
+    }
+    """
+
+    parsed = parse_decision_brief_response(payload, _decision_brief_context())
+
+    assert parsed["buy_today"][0]["item_id"] == 2
+    assert parsed["buy_less"][0]["recommended_action"] == "BUY_LESS"
+    assert parsed["safety_status"] == "validated"
+
+
+def test_parse_decision_brief_response_fills_empty_text_lists_from_context():
+    payload = """
+    {
+      "summary": "Handle eggs first, reduce paneer purchases, and delay rice.",
+      "buy_today": [
+        {"item_id": 2, "item_name": "Eggs", "recommended_action": "RESTOCK_NOW", "reason": "Shortage risk is highest."}
+      ],
+      "buy_less": [
+        {"item_id": 1, "item_name": "Paneer", "recommended_action": "BUY_LESS", "reason": "Waste risk is elevated."}
+      ],
+      "delay": [
+        {"item_id": 3, "item_name": "Rice", "recommended_action": "DELAY_PURCHASE", "reason": "Coverage is healthy."}
+      ],
+      "estimated_impact": {
+        "cash": "Delay low-risk purchases to preserve cash.",
+        "waste": "Smaller paneer order lowers waste exposure.",
+        "shortage": "Restocking eggs lowers shortage risk."
+      },
+      "top_tradeoffs": [],
+      "recommended_order": [],
+      "confidence_note": "Grounded in current StockWise metrics.",
+      "warning_flag": "Review records before ordering."
+    }
+    """
+
+    parsed = parse_decision_brief_response(payload, _decision_brief_context())
+
+    assert parsed["top_tradeoffs"]
+    assert parsed["recommended_order"]
+
+
+def test_parse_decision_brief_response_fills_null_text_lists_from_context():
+    payload = """
+    {
+      "summary": "Handle eggs first.",
+      "buy_today": [
+        {"item_id": 2, "item_name": "Eggs", "recommended_action": "RESTOCK_NOW", "reason": "Shortage risk is highest."}
+      ],
+      "buy_less": [],
+      "delay": [],
+      "estimated_impact": {
+        "cash": "Delay low-risk purchases to preserve cash.",
+        "waste": "Smaller paneer order lowers waste exposure.",
+        "shortage": "Restocking eggs lowers shortage risk."
+      },
+      "top_tradeoffs": null,
+      "recommended_order": "",
+      "confidence_note": "Grounded in current StockWise metrics.",
+      "warning_flag": "Review records before ordering."
+    }
+    """
+
+    parsed = parse_decision_brief_response(payload, _decision_brief_context())
+
+    assert parsed["top_tradeoffs"]
+    assert parsed["recommended_order"]
+
+
+def test_parse_decision_brief_response_accepts_single_text_list_value():
+    payload = """
+    {
+      "summary": "Handle eggs first.",
+      "buy_today": [
+        {"item_id": 2, "item_name": "Eggs", "recommended_action": "RESTOCK_NOW", "reason": "Shortage risk is highest."}
+      ],
+      "buy_less": [],
+      "delay": [],
+      "estimated_impact": {
+        "cash": "Delay low-risk purchases to preserve cash.",
+        "waste": "Smaller paneer order lowers waste exposure.",
+        "shortage": "Restocking eggs lowers shortage risk."
+      },
+      "top_tradeoffs": "Restocking eggs uses cash but protects availability.",
+      "recommended_order": "Restock Now: Eggs",
+      "confidence_note": "Grounded in current StockWise metrics.",
+      "warning_flag": "Review records before ordering."
+    }
+    """
+
+    parsed = parse_decision_brief_response(payload, _decision_brief_context())
+
+    assert parsed["top_tradeoffs"] == ["Restocking eggs uses cash but protects availability."]
+    assert parsed["recommended_order"] == ["Restock Now: Eggs"]
+
+
+def test_parse_decision_brief_response_rejects_hallucinated_item_id():
+    payload = """
+    {
+      "summary": "Buy coffee beans too.",
+      "buy_today": [
+        {"item_id": 99, "item_name": "Coffee Beans", "recommended_action": "RESTOCK_NOW", "reason": "Made up item."}
+      ],
+      "buy_less": [],
+      "delay": [],
+      "estimated_impact": {"cash": "cash", "waste": "waste", "shortage": "shortage"},
+      "top_tradeoffs": ["tradeoff"],
+      "recommended_order": ["order"],
+      "confidence_note": "note",
+      "warning_flag": null
+    }
+    """
+
+    with pytest.raises(DecisionBriefValidationError, match="unknown item_id"):
+        parse_decision_brief_response(payload, _decision_brief_context())
+
+
+def test_parse_decision_brief_response_rejects_unsupported_profit_claims():
+    payload = """
+    {
+      "summary": "This will increase profit immediately.",
+      "buy_today": [],
+      "buy_less": [],
+      "delay": [],
+      "estimated_impact": {"cash": "cash", "waste": "waste", "shortage": "shortage"},
+      "top_tradeoffs": ["Revenue will grow."],
+      "recommended_order": ["order"],
+      "confidence_note": "note",
+      "warning_flag": null
+    }
+    """
+
+    with pytest.raises(DecisionBriefValidationError, match="unsupported"):
+        parse_decision_brief_response(payload, _decision_brief_context())
+
+
+def test_build_fallback_decision_brief_returns_safe_payload():
+    fallback = build_fallback_decision_brief(_decision_brief_context())
+
+    assert fallback["source"] == "fallback"
+    assert fallback["safety_status"] == "fallback_used"
+    assert fallback["buy_today"][0]["item_name"] == "Eggs"
+    assert fallback["estimated_impact"]["shortage"]

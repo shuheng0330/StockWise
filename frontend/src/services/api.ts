@@ -3,6 +3,7 @@ import {
   AnalysisResponse,
   ChatRequest,
   ChatResponse,
+  DecisionBriefResponse,
   ExplanationRequest,
   ExplanationResponse,
   ManualItemInput,
@@ -15,6 +16,8 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8
 
 class ApiClient {
   private client: AxiosInstance;
+  private analysisCache = new Map<string, AnalysisResponse>();
+  private recordsCache = new Map<string, any>();
 
   constructor() {
     this.client = axios.create({
@@ -37,6 +40,21 @@ class ApiClient {
     });
   }
 
+  private async cacheKey(analysisId: string): Promise<string> {
+    const { data } = await supabase.auth.getSession();
+    return `${data.session?.access_token || 'anonymous'}:${analysisId}`;
+  }
+
+  private async cacheAnalysis(response: AnalysisResponse): Promise<void> {
+    this.analysisCache.set(await this.cacheKey(response.analysis_id), response);
+  }
+
+  private async clearAnalysisCaches(analysisId: string): Promise<void> {
+    const key = await this.cacheKey(analysisId);
+    this.analysisCache.delete(key);
+    this.recordsCache.delete(key);
+  }
+
   async uploadCsv(file: File): Promise<AnalysisResponse> {
     const formData = new FormData();
     formData.append('file', file);
@@ -45,16 +63,23 @@ class ApiClient {
         'Content-Type': 'multipart/form-data',
       },
     });
+    await this.cacheAnalysis(response.data);
     return response.data;
   }
 
   async createManualAnalysis(items: ManualItemInput[]): Promise<AnalysisResponse> {
     const response = await this.client.post('/api/v1/manual-analyses', { items });
+    await this.cacheAnalysis(response.data);
     return response.data;
   }
 
-  async getAnalysis(analysisId: string): Promise<AnalysisResponse> {
+  async getAnalysis(analysisId: string, options?: { refresh?: boolean }): Promise<AnalysisResponse> {
+    const key = await this.cacheKey(analysisId);
+    if (!options?.refresh && this.analysisCache.has(key)) {
+      return this.analysisCache.get(key) as AnalysisResponse;
+    }
     const response = await this.client.get(`/api/v1/analyses/${analysisId}`);
+    this.analysisCache.set(key, response.data);
     return response.data;
   }
 
@@ -63,8 +88,13 @@ class ApiClient {
     return response.data;
   }
 
-  async getRecords(analysisId: string): Promise<any> {
+  async getRecords(analysisId: string, options?: { refresh?: boolean }): Promise<any> {
+    const key = await this.cacheKey(analysisId);
+    if (!options?.refresh && this.recordsCache.has(key)) {
+      return this.recordsCache.get(key);
+    }
     const response = await this.client.get(`/api/v1/analyses/${analysisId}/records`);
+    this.recordsCache.set(key, response.data);
     return response.data;
   }
 
@@ -73,11 +103,13 @@ class ApiClient {
       `/api/v1/analyses/${analysisId}/items/${itemId}`,
       data
     );
+    await this.clearAnalysisCaches(analysisId);
     return response.data;
   }
 
   async deleteRecord(analysisId: string, itemId: string | number): Promise<void> {
     await this.client.delete(`/api/v1/analyses/${analysisId}/items/${itemId}`);
+    await this.clearAnalysisCaches(analysisId);
   }
 
   async simulate(
@@ -95,22 +127,34 @@ class ApiClient {
   async getExplanation(
     analysisId: string,
     itemId: string | number,
-    request?: ExplanationRequest
+    request?: ExplanationRequest,
+    options?: { refresh?: boolean }
   ): Promise<ExplanationResponse> {
     const response = await this.client.post(
       `/api/v1/analyses/${analysisId}/items/${itemId}/explanation`,
-      request || {}
+      request || {},
+      { params: options?.refresh ? { refresh: true } : undefined }
     );
     return response.data;
   }
 
   async getAiChat(
     analysisId: string,
-    request: ChatRequest
+    request: ChatRequest,
+    options?: { refresh?: boolean }
   ): Promise<ChatResponse> {
     const response = await this.client.post(
       `/api/v1/analyses/${analysisId}/ai-chat`,
-      request
+      request,
+      { params: options?.refresh ? { refresh: true } : undefined }
+    );
+    return response.data;
+  }
+
+  async getDecisionBrief(analysisId: string, options?: { refresh?: boolean }): Promise<DecisionBriefResponse> {
+    const response = await this.client.get(
+      `/api/v1/analyses/${analysisId}/decision-brief`,
+      { params: options?.refresh ? { refresh: true } : undefined }
     );
     return response.data;
   }

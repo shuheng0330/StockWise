@@ -35,12 +35,12 @@ interface NavItemProps {
 }
 
 function NavItem({ icon, label, href, onClick, disabled, active, fullWidth }: NavItemProps) {
-    const baseClasses = `flex items-center gap-2 px-4 py-2 rounded-lg transition-colors whitespace-nowrap ${fullWidth ? 'w-full' : ''}`.trim();
+    const baseClasses = `flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 whitespace-nowrap ${fullWidth ? 'w-full justify-start lg:w-auto' : ''}`.trim();
     const stateClasses = disabled
-        ? "text-gray-400 cursor-not-allowed"
+        ? "cursor-not-allowed text-gray-400"
         : active
-            ? "bg-blue-100 text-blue-700"
-            : "text-gray-700 hover:bg-gray-100 hover:text-gray-900";
+            ? "bg-blue-600 text-white shadow-sm"
+            : "text-slate-700 hover:bg-white hover:text-slate-900";
 
     const content = (
         <>
@@ -66,7 +66,7 @@ function NavItem({ icon, label, href, onClick, disabled, active, fullWidth }: Na
     }
 
     return (
-        <button onClick={onClick} className={`${baseClasses} ${stateClasses}`}>
+        <button type="button" onClick={onClick} className={`${baseClasses} ${stateClasses}`}>
             {content}
         </button>
     );
@@ -154,22 +154,27 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
 
             {/* Desktop-only hover submenu */}
             <div className="relative group hidden lg:block">
-                <button className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium whitespace-nowrap">
+                <button
+                    type="button"
+                    className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 transition-all duration-200 hover:bg-white hover:text-slate-900"
+                >
                     <Upload className="w-5 h-5" />
                     Data Entry
                 </button>
-                <div className="absolute top-full left-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                <div className="invisible absolute left-0 top-full z-50 mt-2 w-52 rounded-xl border border-slate-200 bg-white p-1.5 opacity-0 shadow-lg transition-all duration-200 group-hover:visible group-hover:opacity-100">
                     <div className="py-2">
                         <button
+                            type="button"
                             onClick={() => handleFeature('upload')}
-                            className="flex items-center gap-2 w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
                         >
                             <Upload className="w-4 h-4" />
                             CSV Upload
                         </button>
                         <button
+                            type="button"
                             onClick={() => handleFeature('manual')}
-                            className="flex items-center gap-2 w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
                         >
                             <FileText className="w-4 h-4" />
                             Manual Entry
@@ -181,24 +186,28 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
             {/* Mobile-only collapsible Data Entry */}
             <div className="lg:hidden w-full">
                 <button
+                    type="button"
                     onClick={() => setDataEntryOpen(!dataEntryOpen)}
-                    className="flex items-center gap-2 w-full px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium whitespace-nowrap"
+                    aria-expanded={dataEntryOpen}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-white"
                 >
                     <Upload className="w-5 h-5" />
                     Data Entry
                 </button>
                 {dataEntryOpen && (
-                    <div className="pl-8 flex flex-col">
+                    <div className="mt-1 flex flex-col gap-1 pl-8">
                         <button
+                            type="button"
                             onClick={() => handleFeature('upload')}
-                            className="flex items-center gap-2 px-4 py-2 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-white"
                         >
                             <Upload className="w-4 h-4" />
                             CSV Upload
                         </button>
                         <button
+                            type="button"
                             onClick={() => handleFeature('manual')}
-                            className="flex items-center gap-2 px-4 py-2 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-white"
                         >
                             <FileText className="w-4 h-4" />
                             Manual Entry
@@ -256,11 +265,12 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
             />
 
             <button
+                type="button"
                 onClick={() => {
                     closeMobile();
                     handleLogout();
                 }}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-gray-700 hover:bg-gray-100 hover:text-gray-900 font-medium"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 transition-all duration-200 hover:bg-rose-50 hover:text-rose-700 lg:ml-1 lg:w-auto lg:border-l lg:border-slate-200 lg:pl-4"
             >
                 <LogOut className="w-5 h-5" />
                 <span className="font-medium">Logout</span>
@@ -269,39 +279,36 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
     );
 
     return (
-        <nav className="bg-gradient-to-r from-white via-blue-50/40 to-white border-b border-gray-200 shadow-sm sticky top-0 z-40 backdrop-blur">
-            <div className="w-full px-4 md:px-6">
-                <div className="flex items-center justify-between h-16 gap-4">
-                    {/* Logo/Brand - flush left */}
-                    <Link href="/" className="flex items-center gap-2 flex-shrink-0 group">
-                        <span className="flex items-center justify-center w-9 h-9 md:w-10 md:h-10 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 shadow-sm group-hover:shadow-md transition-shadow">
+        <nav className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/75">
+            <div className="mx-auto w-full max-w-[1400px] px-4 md:px-6">
+                <div className="flex h-[74px] items-center gap-4">
+                    <Link href="/" className="group flex flex-shrink-0 items-center gap-2.5">
+                        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 shadow-sm transition-shadow group-hover:shadow-md">
                             <BarChart3 className="w-5 h-5 md:w-6 md:h-6 text-white" />
                         </span>
-                        <span className="text-lg md:text-xl font-bold text-gray-900 tracking-tight">
+                        <span className="text-lg font-bold tracking-tight text-gray-900 md:text-xl">
                             Stock<span className="text-blue-600">Wise</span>
                         </span>
                     </Link>
 
-                    {/* Desktop Navigation - right aligned */}
-                    <div className="hidden lg:flex items-center gap-1 ml-auto">
+                    <div className="ml-auto hidden items-center rounded-2xl border border-slate-200 bg-slate-50/80 p-1.5 shadow-[0_8px_24px_-18px_rgba(15,23,42,0.7)] lg:flex">
                         {navLinks}
                     </div>
 
-                    {/* Mobile menu toggle */}
                     <button
                         type="button"
                         aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                        aria-expanded={mobileOpen}
                         onClick={() => setMobileOpen(!mobileOpen)}
-                        className="lg:hidden p-2 rounded-lg text-gray-700 hover:bg-gray-100"
+                        className="ml-auto rounded-xl p-2 text-slate-700 transition-colors hover:bg-slate-100 lg:hidden"
                     >
                         {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
                     </button>
                 </div>
 
-                {/* Mobile Menu */}
                 {mobileOpen && (
-                    <div className="lg:hidden py-3 border-t border-gray-200">
-                        <div className="flex flex-col gap-1">
+                    <div className="border-t border-slate-200 py-3 lg:hidden">
+                        <div className="flex flex-col gap-1 rounded-2xl bg-slate-50 p-2">
                             {navLinks}
                         </div>
                     </div>

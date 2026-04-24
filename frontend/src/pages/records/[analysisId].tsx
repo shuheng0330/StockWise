@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/router';
-import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
-import { Button, Card, Alert, Input, Select } from '@/components/common';
+import { Alert, Button, Card, Input } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
-import { apiClient } from '@/services/api';
 import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
-import { InventoryItem, ManualItemInput, PerishabilityLevel, UsagePeriod, RecommendedAction } from '@/types';
+import { apiClient } from '@/services/api';
+import { InventoryItem, ManualItemInput, RecommendedAction } from '@/types';
+import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 
 type SortKey = 'date' | 'reorder_urgency_score' | 'waste_risk_score';
@@ -207,8 +207,6 @@ export default function RecordsPage() {
             <span className="text-gray-600 font-medium">Sort by:</span>
             {([
               { key: 'date', label: 'Date' },
-              { key: 'reorder_urgency_score', label: 'Urgency' },
-              { key: 'waste_risk_score', label: 'Waste Risk' },
             ] as { key: SortKey; label: string }[]).map(({ key, label }) => (
               <button
                 key={key}

@@ -35,7 +35,7 @@
 - `GET /api/v1/analyses/{analysis_id}` now falls back to Supabase snapshots after an in-memory cache miss.
 - Live GLM explanation generation verified through the configured ILMU OpenAI-compatible endpoint.
 - Live provider requests now use JSON mode, disable thinking, and allocate enough output tokens for the required explanation contract.
-- AI Inventory Copilot chat implemented on the dashboard with structured responses, simulation handoff, and deterministic fallback.
+- AI Inventory Advisor chat implemented on the dashboard with structured responses, simulation handoff, and deterministic fallback.
 - Automated tests added for services and API routes.
 - Documentation updated to reflect the shared input contract, CSV compatibility behavior, observation-history normalization, and Supabase persistence behavior.
 
