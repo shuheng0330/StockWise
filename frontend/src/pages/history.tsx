@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Clock, FileText, Trash2, Upload } from 'lucide-react';
+import { Clock, FileText, Trash2, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Alert, Badge, Button, Card } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
@@ -9,7 +9,6 @@ import {
   clearAnalysisHistory,
   getAnalysisHistory,
   removeAnalysisFromHistory,
-  saveLatestAnalysisId,
   subscribeToAnalysisHistory,
 } from '@/lib/analysisSession';
 
@@ -30,7 +29,7 @@ function sourceBadge(source: AnalysisHistoryEntry['source']) {
   if (source === 'manual') {
     return <Badge label="Manual Entry" variant="success" />;
   }
-  return <Badge label="Analysis" variant="warning" />;
+  return <Badge label="Entry" variant="warning" />;
 }
 
 function sourceIcon(source: AnalysisHistoryEntry['source']) {
@@ -63,14 +62,10 @@ export default function HistoryPage() {
 
   const handleClear = () => {
     if (history.length === 0) return;
-    if (!confirm('Clear all analysis history? This cannot be undone.')) return;
+    if (!confirm('Clear all entry history? This cannot be undone.')) return;
     clearAnalysisHistory();
     setHistory([]);
     toast.success('History cleared');
-  };
-
-  const handleOpen = (analysisId: string) => {
-    saveLatestAnalysisId(analysisId);
   };
 
   return (
@@ -80,14 +75,14 @@ export default function HistoryPage() {
       <div className="max-w-5xl mx-auto px-4 md:px-8 py-8">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Analysis History</h1>
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Entry History</h1>
             <p className="text-gray-600 mt-1 text-sm md:text-base">
-              Recent analyses saved in this browser. Tap an entry to jump back to its dashboard.
+              A log of every CSV upload and manual entry submitted from this browser.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Link href="/">
-              <Button variant="secondary">New Analysis</Button>
+              <Button variant="secondary">New Entry</Button>
             </Link>
             <Button variant="outline" onClick={handleClear} disabled={history.length === 0}>
               Clear History
@@ -98,8 +93,8 @@ export default function HistoryPage() {
         {hydrated && history.length === 0 ? (
           <Alert
             type="info"
-            title="No history yet"
-            message="Create or open an analysis and it will appear here for quick access later."
+            title="No entries yet"
+            message="Upload a CSV or submit a manual entry — each one will be logged here."
           />
         ) : (
           <div className="grid gap-3">
@@ -113,30 +108,16 @@ export default function HistoryPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium text-gray-900 truncate">
-                          {entry.label || 'Analysis'}
+                          {entry.label || 'Entry'}
                         </p>
                         {sourceBadge(entry.source)}
                       </div>
-                      <p className="text-xs md:text-sm text-gray-500 mt-1 break-all">
-                        <span className="font-mono">{entry.analysisId}</span>
-                      </p>
-                      <p className="text-xs text-gray-500 mt-0.5">
+                      <p className="text-xs text-gray-500 mt-1">
                         {formatTimestamp(entry.createdAt)}
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 sm:flex-shrink-0">
-                    <Link href={`/dashboard/${entry.analysisId}`} onClick={() => handleOpen(entry.analysisId)}>
-                      <Button variant="primary" size="sm" className="inline-flex items-center gap-1">
-                        Open
-                        <ArrowRight className="w-4 h-4" />
-                      </Button>
-                    </Link>
-                    <Link href={`/export/${entry.analysisId}`} onClick={() => handleOpen(entry.analysisId)}>
-                      <Button variant="secondary" size="sm">
-                        Export
-                      </Button>
-                    </Link>
+                  <div className="sm:flex-shrink-0">
                     <Button
                       variant="outline"
                       size="sm"
