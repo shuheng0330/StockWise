@@ -25,6 +25,15 @@ export default function EntryPage() {
     }
   }, [user, loading, router]);
 
+  useEffect(() => {
+    if (!router.isReady) return;
+    const queryMode = router.query.mode;
+    const value = Array.isArray(queryMode) ? queryMode[0] : queryMode;
+    if (value === 'upload' || value === 'manual') {
+      setMode(value);
+    }
+  }, [router.isReady, router.query.mode]);
+
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
@@ -189,7 +198,12 @@ export default function EntryPage() {
           <div className="space-y-6">
             <Button
               variant="secondary"
-              onClick={() => setMode(null)}
+              onClick={() => {
+                setMode(null);
+                if (router.query.mode) {
+                  router.replace('/', undefined, { shallow: true });
+                }
+              }}
             >
               ← Back
             </Button>
@@ -227,7 +241,12 @@ export default function EntryPage() {
           <div className="space-y-6">
             <Button
               variant="secondary"
-              onClick={() => setMode(null)}
+              onClick={() => {
+                setMode(null);
+                if (router.query.mode) {
+                  router.replace('/', undefined, { shallow: true });
+                }
+              }}
             >
               ← Back
             </Button>

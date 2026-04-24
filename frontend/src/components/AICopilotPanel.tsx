@@ -245,19 +245,19 @@ export function AICopilotPanel({
             placeholder="Ask about restocking, waste risk, delay candidates, or what changed after a simulation."
             className="mt-3 min-h-[180px] w-full resize-none rounded-lg border border-slate-300 bg-white px-3 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-200"
           />
-          <div className="mt-4 flex items-center justify-between gap-3">
-            <p className="text-sm text-slate-500">
-              The copilot stays inside the current analysis and won’t use outside business data.
-            </p>
+          <div className="mt-4 flex flex-col gap-2">
             <Button
               type="button"
               onClick={() => submitMessage(draft, initialSimulationContext)}
               loading={isSending}
-              className="inline-flex items-center gap-2"
+              className="w-full inline-flex items-center justify-center gap-2 whitespace-nowrap"
             >
               <Send className="w-4 h-4" />
               <span>Ask AI</span>
             </Button>
+            <p className="text-sm text-slate-500 text-center">
+              The copilot stays inside the current analysis and won’t use outside business data.
+            </p>
           </div>
         </div>
       </div>
