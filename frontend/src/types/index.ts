@@ -52,6 +52,33 @@ export interface AnalysisResponse {
   items: InventoryItem[];
 }
 
+export interface DecisionBriefItem {
+  item_id: number;
+  item_name: string;
+  recommended_action: RecommendedAction;
+  reason: string;
+}
+
+export interface DecisionBriefImpact {
+  cash: string;
+  waste: string;
+  shortage: string;
+}
+
+export interface DecisionBriefResponse {
+  source: 'mock' | 'live' | 'fallback';
+  summary: string;
+  buy_today: DecisionBriefItem[];
+  buy_less: DecisionBriefItem[];
+  delay: DecisionBriefItem[];
+  estimated_impact: DecisionBriefImpact;
+  top_tradeoffs: string[];
+  recommended_order: string[];
+  confidence_note: string;
+  warning_flag?: string | null;
+  safety_status: 'validated' | 'retried' | 'fallback_used';
+}
+
 export interface SimulationRequest {
   simulated_order_qty: number;
 }

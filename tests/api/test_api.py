@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import json
 import pytest
 import time
 
@@ -257,6 +258,39 @@ def test_explanation_endpoint_falls_back_on_malformed_provider_response():
     assert body["recommended_action"] == expected_action
 
 
+def test_explanation_endpoint_reuses_cached_response_until_refresh_is_requested():
+    class CountingExplanationProvider(MockZAIProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def generate_explanation(self, context):
+            self.calls += 1
+            payload = json.loads(super().generate_explanation(context))
+            payload["short_reason"] = f"Cached explanation {self.calls}."
+            return json.dumps(payload)
+
+    provider = CountingExplanationProvider()
+    client = TestClient(create_app(glm_provider=provider))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    first = client.post(f"/api/v1/analyses/{analysis['analysis_id']}/items/1/explanation", json={})
+    second = client.post(f"/api/v1/analyses/{analysis['analysis_id']}/items/1/explanation", json={})
+    refreshed = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1/explanation?refresh=true",
+        json={},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert refreshed.status_code == 200
+    assert provider.calls == 2
+    assert second.json()["short_reason"] == "Cached explanation 1."
+    assert refreshed.json()["short_reason"] == "Cached explanation 2."
+
+
 def test_explanation_endpoint_uses_in_memory_item_when_supabase_store_is_unavailable():
     class ExplodingSupabaseStore:
         def persist_observations(self, observations, **kwargs):
@@ -395,6 +429,54 @@ def test_ai_chat_endpoint_falls_back_on_invalid_provider_response():
     assert body["answer"]
 
 
+def test_ai_chat_endpoint_reuses_cached_response_until_refresh_is_requested():
+    class CountingChatProvider(MockZAIProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def generate_inventory_chat(self, context):
+            self.calls += 1
+            return f"""
+            {{
+              "scope": "analysis",
+              "answer": "Cached answer {self.calls}.",
+              "supporting_points": ["Call {self.calls}."],
+              "related_items": [
+                {{
+                  "item_id": 1,
+                  "item_name": "Paneer",
+                  "recommended_action": "BUY_LESS",
+                  "reason": "Waste risk is high."
+                }}
+              ],
+              "suggested_follow_ups": ["Which items can I delay?"],
+              "warning_flag": null
+            }}
+            """
+
+    provider = CountingChatProvider()
+    client = TestClient(create_app(glm_provider=provider))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+    payload = {"message": "What should I buy today?", "recent_messages": []}
+
+    first = client.post(f"/api/v1/analyses/{analysis['analysis_id']}/ai-chat", json=payload)
+    second = client.post(f"/api/v1/analyses/{analysis['analysis_id']}/ai-chat", json=payload)
+    refreshed = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/ai-chat?refresh=true",
+        json=payload,
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert refreshed.status_code == 200
+    assert provider.calls == 2
+    assert second.json()["answer"] == "Cached answer 1."
+    assert refreshed.json()["answer"] == "Cached answer 2."
+
+
 def test_ai_chat_endpoint_politely_refuses_off_topic_questions():
     client = TestClient(create_app(glm_provider=MockZAIProvider()))
     analysis = client.post(
@@ -411,6 +493,107 @@ def test_ai_chat_endpoint_politely_refuses_off_topic_questions():
     body = response.json()
     assert "inventory" in body["answer"].lower()
     assert body["source"] == "fallback"
+
+
+def test_decision_brief_endpoint_returns_structured_mock_response():
+    client = TestClient(create_app(glm_provider=MockZAIProvider(), enable_supabase=False))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.get(f"/api/v1/analyses/{analysis['analysis_id']}/decision-brief")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "mock"
+    assert body["safety_status"] == "validated"
+    assert body["summary"]
+    assert set(body["estimated_impact"].keys()) == {"cash", "waste", "shortage"}
+
+
+def test_decision_brief_endpoint_retries_then_falls_back_on_hallucinated_response():
+    class HallucinatingBriefProvider(MockZAIProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def generate_decision_brief(self, context):
+            self.calls += 1
+            return """
+            {
+              "summary": "Buy invented coffee beans for higher profit.",
+              "buy_today": [
+                {
+                  "item_id": 999,
+                  "item_name": "Coffee Beans",
+                  "recommended_action": "RESTOCK_NOW",
+                  "reason": "This invented item will increase profit."
+                }
+              ],
+              "buy_less": [],
+              "delay": [],
+              "estimated_impact": {"cash": "cash", "waste": "waste", "shortage": "shortage"},
+              "top_tradeoffs": ["Revenue improves."],
+              "recommended_order": ["Buy invented item."],
+              "confidence_note": "note",
+              "warning_flag": null
+            }
+            """
+
+    provider = HallucinatingBriefProvider()
+    client = TestClient(create_app(glm_provider=provider, enable_supabase=False))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.get(f"/api/v1/analyses/{analysis['analysis_id']}/decision-brief")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert provider.calls == 2
+    assert body["source"] == "fallback"
+    assert body["safety_status"] == "fallback_used"
+    assert all(item["item_id"] != 999 for item in body["buy_today"])
+
+
+def test_decision_brief_endpoint_reuses_cached_response_until_refresh_is_requested():
+    class CountingBriefProvider(MockZAIProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def generate_decision_brief(self, context):
+            self.calls += 1
+            response = super().generate_decision_brief(context)
+            payload = json.loads(response)
+            payload["summary"] = f"Cached decision brief {self.calls}."
+            return json.dumps(payload)
+
+    provider = CountingBriefProvider()
+    client = TestClient(create_app(glm_provider=provider, enable_supabase=False))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    first = client.get(f"/api/v1/analyses/{analysis['analysis_id']}/decision-brief")
+    second = client.get(f"/api/v1/analyses/{analysis['analysis_id']}/decision-brief")
+    refreshed = client.get(f"/api/v1/analyses/{analysis['analysis_id']}/decision-brief?refresh=true")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert refreshed.status_code == 200
+    assert provider.calls == 2
+    assert second.json()["summary"] == "Cached decision brief 1."
+    assert refreshed.json()["summary"] == "Cached decision brief 2."
+
+
+def test_decision_brief_endpoint_requires_authenticated_user():
+    client = TestClient(create_app(auth_user_resolver=_test_user_resolver))
+
+    response = client.get("/api/v1/analyses/some-analysis/decision-brief")
+
+    assert response.status_code == 401
 
 
 def test_ai_chat_endpoint_rejects_unauthenticated_requests():
@@ -950,6 +1133,35 @@ def test_update_record_endpoint_recomputes_item_and_kpis():
         "DELAY_PURCHASE",
         "MONITOR_CLOSELY",
     }
+
+
+def test_update_record_endpoint_allows_date_edit():
+    client = TestClient(create_app())
+    payload = {
+        "items": [
+            {
+                "item_name": "Milk",
+                "current_stock": 8.0,
+                "unit": "litre",
+                "usage_value": 4.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 8.0,
+                "seasonal_factor": 1.1,
+                "perishability_level": "high",
+            }
+        ]
+    }
+    analysis = client.post("/api/v1/manual-analyses", json=payload).json()
+
+    response = client.patch(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1",
+        json={"date": "2026-04-24"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["last_updated"] == "2026-04-24"
 
 
 def test_delete_record_endpoint_removes_item_and_updates_analysis():

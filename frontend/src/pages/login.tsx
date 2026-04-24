@@ -40,7 +40,7 @@ export default function LoginPage() {
         <div>
           <h1 className="text-center text-4xl font-bold text-gray-900">StockWise</h1>
           <h2 className="mt-2 text-center text-sm text-gray-600">
-            AI Decision Copilot for Inventory Reordering and Waste Reduction
+            AI Decision Advisor for Inventory Reordering and Waste Reduction
           </h2>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleLogin}>
