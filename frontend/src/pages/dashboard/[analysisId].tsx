@@ -1,23 +1,55 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { Search, Filter, TrendingUp, AlertCircle, DollarSign, Percent } from 'lucide-react';
+import { Search, Filter, TrendingUp, AlertCircle, DollarSign, Percent, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { Button, Card, Input, Alert } from '@/components/common';
+import { AICopilotPanel } from '@/components/AICopilotPanel';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
-import { recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
+import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { AnalysisResponse, InventoryItem, RecommendedAction } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 
 export default function Dashboard() {
   const router = useRouter();
-  const { analysisId } = router.query;
+  const { analysisId, chatItemId, simulated, chatPrompt } = router.query;
 
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<RecommendedAction | 'ALL'>('ALL');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
+  const [sortKey, setSortKey] = useState<'date' | 'reorder_urgency_score' | 'waste_risk_score' | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const handleSort = (key: 'date' | 'reorder_urgency_score' | 'waste_risk_score') => {
+    if (sortKey === key) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'date' ? 'desc' : 'desc');
+    }
+  };
+
+  const renderSortIcon = (key: 'date' | 'reorder_urgency_score' | 'waste_risk_score') => {
+    if (sortKey !== key) {
+      return <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />;
+    }
+    return sortDir === 'asc' ? (
+      <ArrowUp className="w-3.5 h-3.5 text-blue-600" />
+    ) : (
+      <ArrowDown className="w-3.5 h-3.5 text-blue-600" />
+    );
+  };
+
+  const initialChatPrompt = Array.isArray(chatPrompt) ? chatPrompt[0] : chatPrompt;
+  const initialSimulationContext =
+    chatItemId && simulated
+      ? {
+        item_id: Number(Array.isArray(chatItemId) ? chatItemId[0] : chatItemId),
+        simulated_order_qty: Number(Array.isArray(simulated) ? simulated[0] : simulated),
+      }
+      : undefined;
 
   useEffect(() => {
     if (!analysisId) return;
@@ -33,11 +65,21 @@ export default function Dashboard() {
       const response = await apiClient.getAnalysis(analysisId as string);
       setAnalysis(response);
       saveLatestAnalysisId(response.analysis_id);
-      recordAnalysisInHistory({
-        analysisId: response.analysis_id,
-        label: `${response.items.length} items · ${response.kpi_summary.restock_now_count} to restock`,
-      });
     } catch (err: any) {
+      if (err.response?.status === 404) {
+        clearLatestAnalysisId();
+        try {
+          const latest = await apiClient.getLatestAnalysis();
+          if (latest.analysis_id && latest.analysis_id !== analysisId) {
+            saveLatestAnalysisId(latest.analysis_id);
+            await router.replace(`/dashboard/${latest.analysis_id}`);
+            return;
+          }
+        } catch {
+          await router.replace('/');
+          return;
+        }
+      }
       const message = err.response?.data?.message || err.message || 'Failed to fetch analysis';
       setError(message);
       toast.error(message);
@@ -82,6 +124,23 @@ export default function Dashboard() {
 
     return matchesSearch && matchesAction;
   });
+
+  const sortedItems = sortKey
+    ? [...filteredItems].sort((a, b) => {
+      let av: number | string;
+      let bv: number | string;
+      if (sortKey === 'date') {
+        av = a.date || '';
+        bv = b.date || '';
+      } else {
+        av = (a as any)[sortKey] ?? 0;
+        bv = (b as any)[sortKey] ?? 0;
+      }
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    })
+    : filteredItems;
 
   const getActionColor = (action: RecommendedAction) => {
     switch (action) {
@@ -194,6 +253,21 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
+        <div className="mb-6">
+          <AICopilotPanel
+            analysisId={analysisId as string}
+            initialPrompt={typeof initialChatPrompt === 'string' ? initialChatPrompt : undefined}
+            initialSimulationContext={
+              initialSimulationContext &&
+                Number.isFinite(initialSimulationContext.item_id) &&
+                Number.isFinite(initialSimulationContext.simulated_order_qty)
+                ? initialSimulationContext
+                : undefined
+            }
+            onSendMessage={(request) => apiClient.getAiChat(analysisId as string, request)}
+          />
+        </div>
+
         {/* Filters */}
         <Card className="p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -219,7 +293,7 @@ export default function Dashboard() {
         {/* Results Count */}
         <div className="mb-4">
           <p className="text-gray-600">
-            Showing {filteredItems.length} of {analysis.items.length} items
+            Showing {sortedItems.length} of {analysis.items.length} items
           </p>
         </div>
 
@@ -230,17 +304,41 @@ export default function Dashboard() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Item</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Date</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('date')}
+                      className="inline-flex items-center gap-1 hover:text-blue-600"
+                    >
+                      Date {renderSortIcon('date')}
+                    </button>
+                  </th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Stock</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Days Cover</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Urgency</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Waste Risk</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('reorder_urgency_score')}
+                      className="inline-flex items-center gap-1 hover:text-blue-600"
+                    >
+                      Urgency {renderSortIcon('reorder_urgency_score')}
+                    </button>
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('waste_risk_score')}
+                      className="inline-flex items-center gap-1 hover:text-blue-600"
+                    >
+                      Waste Risk {renderSortIcon('waste_risk_score')}
+                    </button>
+                  </th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Action</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Views</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredItems.map((item) => (
+                {sortedItems.map((item) => (
                   <tr key={item.item_id} className="border-b border-gray-200 hover:bg-gray-50">
                     <td className="px-6 py-4">
                       <p className="font-medium text-gray-900">{item.item_name}</p>
@@ -301,7 +399,7 @@ export default function Dashboard() {
           </div>
         </Card>
 
-        {filteredItems.length === 0 && (
+        {sortedItems.length === 0 && (
           <Card className="p-8 text-center">
             <p className="text-gray-600">No items match your filters.</p>
           </Card>

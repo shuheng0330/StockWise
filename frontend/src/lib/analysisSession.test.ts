@@ -1,4 +1,5 @@
 import {
+  clearLatestAnalysisId,
   getLatestAnalysisId,
   hydrateLatestAnalysisId,
   saveLatestAnalysisId,
@@ -40,5 +41,18 @@ describe('analysis session storage', () => {
 
     expect(analysisId).toBe('analysis-from-db');
     expect(getLatestAnalysisId()).toBe('analysis-from-db');
+  });
+
+  it('clears the saved latest analysis id and notifies listeners', () => {
+    const listener = jest.fn();
+    const unsubscribe = subscribeToLatestAnalysisId(listener);
+
+    saveLatestAnalysisId('analysis-123');
+    clearLatestAnalysisId();
+
+    expect(getLatestAnalysisId()).toBeNull();
+    expect(listener).toHaveBeenLastCalledWith(null);
+
+    unsubscribe();
   });
 });

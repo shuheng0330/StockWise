@@ -94,7 +94,9 @@ class RecordItem(BaseModel):
     manual_reorder_level: float | None = None
     seasonal_factor: float
     recent_waste_percentage: float | None = None
-    recommended_action: Literal["RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"]
+    recommended_action: Literal[
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    ]
 
 
 class RecordsResponse(BaseModel):
@@ -165,6 +167,41 @@ class ExplanationResponse(BaseModel):
     suggested_next_step: str
     confidence_note: str
     warning_flag: str
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=500)
+
+
+class SimulationChatContext(BaseModel):
+    item_id: int
+    simulated_order_qty: float = Field(ge=0)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    recent_messages: list[ChatMessage] = Field(default_factory=list, max_length=6)
+    simulation_context: SimulationChatContext | None = None
+
+
+class ChatRelatedItem(BaseModel):
+    item_id: int
+    item_name: str
+    recommended_action: Literal[
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    ]
+    reason: str
+
+
+class ChatResponse(BaseModel):
+    source: Literal["live", "mock", "fallback"]
+    scope: Literal["analysis", "simulation"]
+    answer: str
+    supporting_points: list[str]
+    related_items: list[ChatRelatedItem]
+    suggested_follow_ups: list[str]
+    warning_flag: str | None = None
 
 
 class ManualItemInput(BaseModel):

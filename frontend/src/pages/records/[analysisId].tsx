@@ -1,21 +1,65 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { Button, Card, Alert, Input, Select } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
+import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { InventoryItem, ManualItemInput, PerishabilityLevel, UsagePeriod, RecommendedAction } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 
+type SortKey = 'date' | 'reorder_urgency_score' | 'waste_risk_score';
+type SortDir = 'asc' | 'desc';
+
 export default function RecordsPage() {
   const router = useRouter();
   const { analysisId } = router.query;
-
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<ManualItemInput>>({});
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir('desc');
+    }
+  };
+
+  const renderSortIcon = (key: SortKey) => {
+    if (sortKey !== key) {
+      return <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />;
+    }
+    return sortDir === 'asc' ? (
+      <ArrowUp className="w-3.5 h-3.5 text-blue-600" />
+    ) : (
+      <ArrowDown className="w-3.5 h-3.5 text-blue-600" />
+    );
+  };
+
+  const sortedItems = useMemo(() => {
+    if (!sortKey) return items;
+    return [...items].sort((a, b) => {
+      let av: number | string;
+      let bv: number | string;
+      if (sortKey === 'date') {
+        av = a.date || '';
+        bv = b.date || '';
+      } else {
+        av = (a as any)[sortKey] ?? 0;
+        bv = (b as any)[sortKey] ?? 0;
+      }
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [items, sortKey, sortDir]);
 
   const getActionColor = (action: RecommendedAction) => {
     switch (action) {
@@ -41,8 +85,30 @@ export default function RecordsPage() {
 
     try {
       const response = await apiClient.getRecords(analysisId as string);
-      setItems(response.items || []);
+
+      // MAP THE DATA HERE: 
+      // This creates a 'date' property if it's missing but 'last_updated' exists
+      const normalizedItems = (response.items || []).map((item: any) => ({
+        ...item,
+        date: item.date || item.last_updated
+      }));
+
+      setItems(normalizedItems);
     } catch (err: any) {
+      if (err.response?.status === 404) {
+        clearLatestAnalysisId();
+        try {
+          const latest = await apiClient.getLatestAnalysis();
+          if (latest.analysis_id && latest.analysis_id !== analysisId) {
+            saveLatestAnalysisId(latest.analysis_id);
+            await router.replace(`/records/${latest.analysis_id}`);
+            return;
+          }
+        } catch {
+          await router.replace('/');
+          return;
+        }
+      }
       const message = err.response?.data?.message || err.message || 'Failed to fetch records';
       setError(message);
       toast.error(message);
@@ -57,7 +123,7 @@ export default function RecordsPage() {
       item_name: item.item_name,
       current_stock: item.current_stock,
       unit: item.unit,
-      category: item.category,
+      date: item.date,
     });
   };
 
@@ -136,13 +202,54 @@ export default function RecordsPage() {
           <Alert type="error" message={error} onClose={() => setError('')} className="mb-6" />
         )}
 
+        <Card className="p-4 mb-4">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-gray-600 font-medium">Sort by:</span>
+            {([
+              { key: 'date', label: 'Date' },
+              { key: 'reorder_urgency_score', label: 'Urgency' },
+              { key: 'waste_risk_score', label: 'Waste Risk' },
+            ] as { key: SortKey; label: string }[]).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => handleSort(key)}
+                className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border transition-colors ${sortKey === key
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                  }`}
+              >
+                {label}
+                {renderSortIcon(key)}
+              </button>
+            ))}
+            {sortKey && (
+              <button
+                type="button"
+                onClick={() => { setSortKey(null); setSortDir('desc'); }}
+                className="text-xs text-gray-500 hover:text-gray-700 underline"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </Card>
+
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Item Name</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Category</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('date')}
+                      className="inline-flex items-center gap-1 hover:text-blue-600"
+                    >
+                      Date {renderSortIcon('date')}
+                    </button>
+                  </th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Stock</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Unit</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Action</th>
@@ -152,7 +259,7 @@ export default function RecordsPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
+                {sortedItems.map((item) => (
                   <tr key={item.item_id} className="border-b border-gray-200 hover:bg-gray-50">
                     {editingId === item.item_id ? (
                       <>
@@ -164,8 +271,9 @@ export default function RecordsPage() {
                         </td>
                         <td className="px-6 py-4">
                           <Input
-                            value={editData.category || ''}
-                            onChange={(e) => setEditData({ ...editData, category: e.target.value })}
+                            type="date"
+                            value={editData.date || ''}
+                            onChange={(e) => setEditData({ ...editData, date: e.target.value })}
                           />
                         </td>
                         <td className="px-6 py-4">
@@ -203,7 +311,7 @@ export default function RecordsPage() {
                     ) : (
                       <>
                         <td className="px-6 py-4 font-medium text-gray-900">{item.item_name}</td>
-                        <td className="px-6 py-4 text-sm text-gray-600">{item.category || '-'}</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{item.date || '-'}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.current_stock}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.unit}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.recommended_action.replace('_', ' ')}</td>

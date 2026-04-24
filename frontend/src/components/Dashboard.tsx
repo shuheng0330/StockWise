@@ -1,30 +1,28 @@
-import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { useRouter } from 'next/router';
-import {
-    Home,
-    Upload,
-    FileText,
-    BarChart3,
-    FileCheck,
-    TrendingUp,
-    MessageSquare,
-    Database,
-    Settings,
-    LogOut,
-    Menu,
-    X,
-    History,
-} from 'lucide-react';
 import {
     getLatestAnalysisId,
     hydrateLatestAnalysisId,
     saveLatestAnalysisId,
     subscribeToLatestAnalysisId,
 } from '@/lib/analysisSession';
+import { useAuth } from '@/lib/auth';
 import { buildAnalysisNavigationTargets } from '@/lib/navigationTargets';
 import { apiClient } from '@/services/api';
-import { useAuth } from '@/lib/auth';
+import {
+    BarChart3,
+    Database,
+    FileCheck,
+    FileText,
+    History,
+    Home,
+    LogOut,
+    Menu,
+    Settings,
+    Upload,
+    X
+} from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/router';
+import React, { useEffect, useState } from 'react';
 
 interface NavItemProps {
     icon: React.ReactNode;
@@ -37,7 +35,7 @@ interface NavItemProps {
 }
 
 function NavItem({ icon, label, href, onClick, disabled, active, fullWidth }: NavItemProps) {
-    const baseClasses = `flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${fullWidth ? 'w-full' : ''}`.trim();
+    const baseClasses = `flex items-center gap-2 px-4 py-2 rounded-lg transition-colors whitespace-nowrap ${fullWidth ? 'w-full' : ''}`.trim();
     const stateClasses = disabled
         ? "text-gray-400 cursor-not-allowed"
         : active
@@ -135,8 +133,12 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
     };
 
     const handleFeature = (feature: 'upload' | 'manual') => {
-        onFeatureSelect(feature);
         closeMobile();
+        if (router.pathname === '/') {
+            onFeatureSelect(feature);
+        } else {
+            router.push(`/?mode=${feature}`);
+        }
     };
 
     const navLinks = (
@@ -147,12 +149,11 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 href="/"
                 active={activeSection === 'home'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             {/* Desktop-only hover submenu */}
             <div className="relative group hidden lg:block">
-                <button className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium">
+                <button className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium whitespace-nowrap">
                     <Upload className="w-5 h-5" />
                     Data Entry
                 </button>
@@ -180,7 +181,7 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
             <div className="lg:hidden w-full">
                 <button
                     onClick={() => setDataEntryOpen(!dataEntryOpen)}
-                    className="flex items-center gap-2 w-full px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium"
+                    className="flex items-center gap-2 w-full px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium whitespace-nowrap"
                 >
                     <Upload className="w-5 h-5" />
                     Data Entry
@@ -212,7 +213,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 disabled={!navigationTargets.analysisHref}
                 active={activeSection === 'dashboard'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -222,27 +222,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 disabled={!navigationTargets.recordsHref}
                 active={activeSection === 'records'}
                 onClick={closeMobile}
-                fullWidth
-            />
-
-            <NavItem
-                icon={<TrendingUp className="w-5 h-5" />}
-                label="Simulation"
-                href={navigationTargets.simulationHref}
-                disabled={!navigationTargets.simulationHref}
-                active={activeSection === 'simulation'}
-                onClick={closeMobile}
-                fullWidth
-            />
-
-            <NavItem
-                icon={<MessageSquare className="w-5 h-5" />}
-                label="Explanations"
-                href={navigationTargets.explanationHref}
-                disabled={!navigationTargets.explanationHref}
-                active={activeSection === 'explanation'}
-                onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -252,7 +231,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 disabled={!navigationTargets.exportHref}
                 active={activeSection === 'export'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -261,7 +239,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 href="/history"
                 active={activeSection === 'history'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -270,24 +247,38 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 href="/settings"
                 active={activeSection === 'settings'}
                 onClick={closeMobile}
-                fullWidth
             />
         </>
     );
 
     return (
-        <nav className="bg-white border-b border-gray-200 shadow-sm">
-            <div className="max-w-7xl mx-auto px-4 md:px-8">
-                <div className="flex items-center justify-between h-16">
-                    {/* Logo/Brand */}
-                    <Link href="/" className="flex items-center gap-2">
-                        <BarChart3 className="w-7 h-7 md:w-8 md:h-8 text-blue-600" />
-                        <span className="text-lg md:text-xl font-bold text-gray-900">StockWise</span>
+        <nav className="bg-gradient-to-r from-white via-blue-50/40 to-white border-b border-gray-200 shadow-sm sticky top-0 z-40 backdrop-blur">
+            <div className="w-full px-4 md:px-6">
+                <div className="flex items-center justify-between h-16 gap-4">
+                    {/* Logo/Brand - flush left */}
+                    <Link href="/" className="flex items-center gap-2 flex-shrink-0 group">
+                        <span className="flex items-center justify-center w-9 h-9 md:w-10 md:h-10 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 shadow-sm group-hover:shadow-md transition-shadow">
+                            <BarChart3 className="w-5 h-5 md:w-6 md:h-6 text-white" />
+                        </span>
+                        <span className="text-lg md:text-xl font-bold text-gray-900 tracking-tight">
+                            Stock<span className="text-blue-600">Wise</span>
+                        </span>
                     </Link>
 
-                    {/* Desktop Navigation */}
-                    <div className="hidden lg:flex items-center gap-1">
+                    {/* Desktop Navigation - centered */}
+                    <div className="hidden lg:flex flex-1 justify-center items-center gap-4">
                         {navLinks}
+                    </div>
+
+                    {/* Desktop logout button - right aligned */}
+                    <div className="hidden lg:flex items-center">
+                        <button
+                            onClick={handleLogout}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-gray-700 hover:bg-gray-100 hover:text-gray-900 font-medium"
+                        >
+                            <LogOut className="w-5 h-5" />
+                            <span className="font-medium">Logout</span>
+                        </button>
                     </div>
 
                     {/* Mobile menu toggle */}
@@ -306,6 +297,16 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                     <div className="lg:hidden py-3 border-t border-gray-200">
                         <div className="flex flex-col gap-1">
                             {navLinks}
+                            <button
+                                onClick={() => {
+                                    closeMobile();
+                                    handleLogout();
+                                }}
+                                className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-gray-700 hover:bg-gray-100 hover:text-gray-900 font-medium"
+                            >
+                                <LogOut className="w-5 h-5" />
+                                <span className="font-medium">Logout</span>
+                            </button>
                         </div>
                     </div>
                 )}

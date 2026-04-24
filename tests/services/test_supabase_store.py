@@ -247,6 +247,117 @@ def test_persist_observations_matches_items_by_owner_identity_not_name_only():
     assert {item["unit"] for item in client.database["items"]} == {"litre", "carton"}
 
 
+def test_persist_observations_scopes_items_and_suppliers_to_owner():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+
+    observation = {
+        "date": "2025-06-12",
+        "item_name": "Milk",
+        "current_stock": 5.0,
+        "unit": "litre",
+        "usage_value": 4.0,
+        "usage_period": "daily",
+        "lead_time_days": 2,
+        "price_per_unit": 8.0,
+        "seasonal_factor": 1.0,
+        "category": "Dairy",
+        "subcategory": "Fresh",
+        "supplier_name": "Supplier A",
+        "perishability_level": "medium",
+    }
+
+    store.persist_observations(
+        [observation],
+        source_type="manual",
+        created_by="user-1",
+        uploaded_by="user-1",
+    )
+    store.persist_observations(
+        [observation],
+        source_type="manual",
+        created_by="user-2",
+        uploaded_by="user-2",
+    )
+
+    assert len(client.database["items"]) == 2
+    assert {item["owner_id"] for item in client.database["items"]} == {"user-1", "user-2"}
+    assert len(client.database["suppliers"]) == 2
+    assert {supplier["owner_id"] for supplier in client.database["suppliers"]} == {"user-1", "user-2"}
+
+
+def test_list_user_observations_returns_only_that_users_rows():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+
+    store.persist_observations(
+        [
+            {
+                "date": "2025-06-10",
+                "item_name": "Paneer",
+                "current_stock": 12.0,
+                "unit": "kg",
+                "usage_value": 2.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+            {
+                "date": "2025-06-11",
+                "item_name": "Paneer",
+                "current_stock": 9.0,
+                "unit": "kg",
+                "usage_value": 3.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+        ],
+        source_type="manual",
+        created_by="user-1",
+        uploaded_by="user-1",
+    )
+    store.persist_observations(
+        [
+            {
+                "date": "2025-06-12",
+                "item_name": "Rice",
+                "current_stock": 20.0,
+                "unit": "kg",
+                "usage_value": 2.0,
+                "usage_period": "daily",
+                "lead_time_days": 2,
+                "price_per_unit": 70.0,
+                "seasonal_factor": 1.0,
+                "category": "Grain",
+                "subcategory": "Staple",
+                "supplier_name": "Supplier B",
+                "recent_waste_percentage": 1.5,
+            }
+        ],
+        source_type="manual",
+        created_by="user-2",
+        uploaded_by="user-2",
+    )
+
+    observations = store.list_user_observations("user-1")
+
+    assert len(observations) == 2
+    assert {observation["item_name"] for observation in observations} == {"Paneer"}
+    assert all(observation["supplier_name"] == "Supplier A" for observation in observations)
+    assert [observation["date"] for observation in observations] == ["2025-06-10", "2025-06-11"]
+
+
 def _ranked_items():
     return [
         {
@@ -402,3 +513,80 @@ def test_get_latest_analysis_id_returns_most_recent_snapshot():
 
     assert older_id != newer_id
     assert store.get_latest_analysis_id() == newer_id
+
+
+def test_get_latest_analysis_id_filters_by_owner():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+
+    older_user_1 = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 4,
+            "item_count": 2,
+            "date_range": {"start": "2025-06-10", "end": "2025-06-12"},
+        },
+        ranked_items=_ranked_items(),
+        source_type="import",
+        created_by="user-1",
+    )
+    store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 4,
+            "item_count": 2,
+            "date_range": {"start": "2025-06-10", "end": "2025-06-12"},
+        },
+        ranked_items=_ranked_items(),
+        source_type="manual",
+        created_by="user-2",
+    )
+    newer_user_1 = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 5,
+            "item_count": 2,
+            "date_range": {"start": "2025-06-10", "end": "2025-06-13"},
+        },
+        ranked_items=_ranked_items(),
+        source_type="manual",
+        created_by="user-1",
+    )
+
+    client.database["analysis_runs"][0]["created_at"] = "2025-06-12T00:00:00+00:00"
+    client.database["analysis_runs"][1]["created_at"] = "2025-06-13T00:00:00+00:00"
+    client.database["analysis_runs"][2]["created_at"] = "2025-06-14T00:00:00+00:00"
+
+    assert older_user_1 != newer_user_1
+    assert store.get_latest_analysis_id("user-1") == newer_user_1
+    assert store.get_latest_analysis_id("user-2") == client.database["analysis_runs"][1]["analysis_id"]
+
+
+def test_get_latest_analysis_id_skips_newer_snapshots_without_results():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+
+    older_id = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 4,
+            "item_count": 2,
+            "date_range": {"start": "2025-06-10", "end": "2025-06-12"},
+        },
+        ranked_items=_ranked_items(),
+        source_type="import",
+        import_batch_id=None,
+    )
+    newer_id = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 4,
+            "item_count": 2,
+            "date_range": {"start": "2025-06-13", "end": "2025-06-15"},
+        },
+        ranked_items=_ranked_items(),
+        source_type="import",
+        import_batch_id=None,
+    )
+    client.database["analysis_runs"][0]["created_at"] = "2025-06-12T00:00:00+00:00"
+    client.database["analysis_runs"][1]["created_at"] = "2025-06-15T00:00:00+00:00"
+    client.database["analysis_item_results"] = [
+        row for row in client.database["analysis_item_results"] if row["analysis_id"] != newer_id
+    ]
+
+    assert store.get_latest_analysis_id() == older_id

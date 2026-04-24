@@ -6,7 +6,7 @@ import { Download, Printer, FileJson, FileSpreadsheet } from 'lucide-react';
 import { Alert, Button, Card } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
-import { recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
+import { saveLatestAnalysisId } from '@/lib/analysisSession';
 import { AnalysisResponse, InventoryItem } from '@/types';
 
 const CSV_COLUMNS: { key: keyof InventoryItem; label: string }[] = [
@@ -83,10 +83,6 @@ export default function ExportPage() {
       const response = await apiClient.getAnalysis(analysisId as string);
       setAnalysis(response);
       saveLatestAnalysisId(response.analysis_id);
-      recordAnalysisInHistory({
-        analysisId: response.analysis_id,
-        label: `Exported ${response.items.length} items`,
-      });
     } catch (err: any) {
       const message = err.response?.data?.message || err.message || 'Failed to fetch analysis';
       setError(message);

@@ -19,6 +19,17 @@ LEGACY_CSV = (
     "2025-06-11,2,Rice,Grain,Staple,kg,20,6,2,2,70,Supplier B,1.0,1.5\n"
 ).encode()
 
+TEST_USER_ID = "user-1"
+OTHER_TEST_USER_ID = "user-2"
+
+
+def _auth_headers(user_id: str = TEST_USER_ID) -> dict[str, str]:
+    return {"Authorization": f"Bearer {user_id}"}
+
+
+def _test_user_resolver(token: str) -> str | None:
+    return token or None
+
 
 def test_upload_endpoint_returns_analysis_and_ranked_items():
     client = TestClient(create_app())
@@ -201,7 +212,7 @@ def test_simulation_endpoint_returns_updated_scenario_metrics():
 
 
 def test_explanation_endpoint_returns_mock_source_by_default():
-    client = TestClient(create_app())
+    client = TestClient(create_app(glm_provider=MockZAIProvider()))
     analysis = client.post(
         "/api/v1/analyses",
         files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
@@ -238,7 +249,12 @@ def test_explanation_endpoint_falls_back_on_malformed_provider_response():
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "fallback"
-    assert body["recommended_action"] == "BUY_LESS"
+    expected_action = next(
+        item["recommended_action"]
+        for item in analysis["items"]
+        if int(item["item_id"]) == 1
+    )
+    assert body["recommended_action"] == expected_action
 
 
 def test_explanation_endpoint_uses_in_memory_item_when_supabase_store_is_unavailable():
@@ -264,9 +280,153 @@ def test_explanation_endpoint_uses_in_memory_item_when_supabase_store_is_unavail
     assert response.json()["item_name"] == "Paneer"
 
 
+def test_ai_chat_endpoint_returns_structured_mock_response():
+    class MockChatProvider(MockZAIProvider):
+        def generate_inventory_chat(self, context):
+            return """
+            {
+              "scope": "analysis",
+              "answer": "Restock urgent items first and buy less paneer.",
+              "supporting_points": [
+                "One item requires immediate restocking.",
+                "Paneer has elevated waste risk."
+              ],
+              "related_items": [
+                {
+                  "item_id": 1,
+                  "item_name": "Paneer",
+                  "recommended_action": "BUY_LESS",
+                  "reason": "Waste risk is high."
+                }
+              ],
+              "suggested_follow_ups": [
+                "Which items can I delay to save cash?",
+                "Why is dairy risky this week?"
+              ],
+              "warning_flag": "Watch dairy waste closely."
+            }
+            """
+
+    client = TestClient(create_app(glm_provider=MockChatProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/ai-chat",
+        json={"message": "What should I buy today?", "recent_messages": []},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "mock"
+    assert body["scope"] == "analysis"
+    assert body["related_items"][0]["item_name"] == "Paneer"
+
+
+def test_ai_chat_endpoint_uses_simulation_scope_when_simulation_context_is_present():
+    class MockChatProvider(MockZAIProvider):
+        def generate_inventory_chat(self, context):
+            assert context["scope"] == "simulation"
+            assert context["simulation"]["item_id"] == 1
+            return """
+            {
+              "scope": "simulation",
+              "answer": "The smaller top-up reduces waste risk.",
+              "supporting_points": [
+                "Coverage remains above lead-time demand.",
+                "Waste exposure is lower after the simulation."
+              ],
+              "related_items": [
+                {
+                  "item_id": 1,
+                  "item_name": "Paneer",
+                  "recommended_action": "BUY_LESS",
+                  "reason": "The simulated order lowers waste exposure."
+                }
+              ],
+              "suggested_follow_ups": [
+                "Should I still order today?",
+                "What changed after my simulation?"
+              ],
+              "warning_flag": null
+            }
+            """
+
+    client = TestClient(create_app(glm_provider=MockChatProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/ai-chat",
+        json={
+            "message": "What changed after my simulation?",
+            "recent_messages": [],
+            "simulation_context": {"item_id": 1, "simulated_order_qty": 3.0},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["scope"] == "simulation"
+
+
+def test_ai_chat_endpoint_falls_back_on_invalid_provider_response():
+    class BrokenChatProvider(MockZAIProvider):
+        def generate_inventory_chat(self, context):
+            return "{not-json"
+
+    client = TestClient(create_app(glm_provider=BrokenChatProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/ai-chat",
+        json={"message": "Which items can I delay to save cash?", "recent_messages": []},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "fallback"
+    assert body["answer"]
+
+
+def test_ai_chat_endpoint_politely_refuses_off_topic_questions():
+    client = TestClient(create_app(glm_provider=MockZAIProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/ai-chat",
+        json={"message": "Tell me a joke about football.", "recent_messages": []},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "inventory" in body["answer"].lower()
+    assert body["source"] == "fallback"
+
+
+def test_ai_chat_endpoint_rejects_unauthenticated_requests():
+    client = TestClient(create_app(auth_user_resolver=_test_user_resolver))
+
+    response = client.post(
+        "/api/v1/analyses/some-analysis/ai-chat",
+        json={"message": "What should I buy today?", "recent_messages": []},
+    )
+
+    assert response.status_code == 401
+
+
 def test_create_app_fails_fast_when_live_mode_has_no_api_key(monkeypatch):
     monkeypatch.setenv("GLM_MODE", "live")
-    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.setenv("ZAI_API_KEY", "")
 
     with pytest.raises(RuntimeError, match="ZAI_API_KEY"):
         create_app()
@@ -896,3 +1056,253 @@ def test_manual_analysis_endpoint_rejects_missing_required_score_inputs():
     response = client.post("/api/v1/manual-analyses", json=payload)
 
     assert response.status_code == 422
+
+
+def test_upload_endpoint_requires_authenticated_user():
+    client = TestClient(create_app(auth_user_resolver=_test_user_resolver))
+
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    )
+
+    assert response.status_code == 401
+
+
+def test_manual_analysis_after_csv_returns_merged_user_history_snapshot():
+    class MemorySupabaseStore:
+        def __init__(self):
+            self.persisted = []
+            self.snapshot_calls = []
+
+        def persist_observations(self, observations, **kwargs):
+            self.persisted.extend([{**row, "_created_by": kwargs["created_by"]} for row in observations])
+            return {
+                "import_batch_id": None if kwargs["source_type"] == "manual" else "import-batch-1",
+                "successful_rows": len(observations),
+                "failed_rows": 0,
+            }
+
+        def list_user_observations(self, user_id):
+            return [
+                {
+                    key: value
+                    for key, value in row.items()
+                    if not key.startswith("_") and key != "item_id"
+                }
+                for row in self.persisted
+                if row["_created_by"] == user_id
+            ]
+
+        def create_analysis_snapshot(self, **kwargs):
+            self.snapshot_calls.append(kwargs)
+            return f"snapshot-{len(self.snapshot_calls)}"
+
+        def get(self, analysis_id, user_id=None):
+            call_index = int(str(analysis_id).split("-")[-1]) - 1
+            ranked_items = self.snapshot_calls[call_index]["ranked_items"]
+            return AnalysisRecord(
+                dataset_summary=self.snapshot_calls[call_index]["dataset_summary"],
+                kpi_summary={
+                    "item_count": len(ranked_items),
+                    "restock_now_count": sum(
+                        1 for item in ranked_items if item["recommended_action"] == "RESTOCK_NOW"
+                    ),
+                    "buy_less_count": sum(
+                        1 for item in ranked_items if item["recommended_action"] == "BUY_LESS"
+                    ),
+                    "high_waste_risk_count": sum(
+                        1 for item in ranked_items if item["waste_risk_score"] >= 70
+                    ),
+                    "inventory_value_at_risk": sum(
+                        item["estimated_waste_cost"] for item in ranked_items
+                    ),
+                    "top_urgent_items": [item["item_name"] for item in ranked_items[:3]],
+                    "top_waste_cost_items": [item["item_name"] for item in ranked_items[:3]],
+                },
+                items=ranked_items,
+            )
+
+    supabase_store = MemorySupabaseStore()
+    client = TestClient(
+        create_app(supabase_store=supabase_store, auth_user_resolver=_test_user_resolver)
+    )
+
+    upload_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("legacy_inventory.csv", LEGACY_CSV, "text/csv")},
+        headers=_auth_headers(),
+    )
+    manual_response = client.post(
+        "/api/v1/manual-analyses",
+        json={
+            "items": [
+                {
+                    "date": "2025-06-12",
+                    "item_name": "Paneer",
+                    "current_stock": 5.0,
+                    "unit": "kg",
+                    "usage_value": 4.0,
+                    "usage_period": "daily",
+                    "lead_time_days": 3,
+                    "price_per_unit": 450.0,
+                    "seasonal_factor": 1.1,
+                    "category": "Dairy",
+                    "subcategory": "Cheese",
+                    "supplier_name": "Supplier A",
+                    "recent_waste_percentage": 4.0,
+                }
+            ]
+        },
+        headers=_auth_headers(),
+    )
+
+    assert upload_response.status_code == 200
+    assert manual_response.status_code == 200
+    assert manual_response.json()["dataset_summary"]["row_count"] == 3
+    assert manual_response.json()["dataset_summary"]["item_count"] == 2
+    assert {item["item_name"] for item in manual_response.json()["items"]} == {"Paneer", "Rice"}
+
+
+def test_get_latest_analysis_is_scoped_to_authenticated_user():
+    class ReadOnlySupabaseStore:
+        def get_latest_analysis_id(self, user_id):
+            assert user_id == TEST_USER_ID
+            return "latest-for-user-1"
+
+        def get(self, analysis_id, user_id=None):
+            assert analysis_id == "latest-for-user-1"
+            assert user_id == TEST_USER_ID
+            return AnalysisRecord(
+                dataset_summary={
+                    "row_count": 1,
+                    "item_count": 1,
+                    "date_range": {"start": "2025-06-12", "end": "2025-06-12"},
+                },
+                kpi_summary={
+                    "item_count": 1,
+                    "restock_now_count": 1,
+                    "buy_less_count": 0,
+                    "high_waste_risk_count": 0,
+                    "inventory_value_at_risk": 0.0,
+                    "top_urgent_items": ["Paneer"],
+                    "top_waste_cost_items": ["Paneer"],
+                },
+                items=[
+                    {
+                        "item_id": 1,
+                        "date": "2025-06-12",
+                        "item_name": "Paneer",
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "unit": "kg",
+                        "supplier_name": "Supplier A",
+                        "current_stock": 5.0,
+                        "reorder_level": 8.0,
+                        "daily_usage": 4.0,
+                        "lead_time": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "waste_percentage": 4.0,
+                        "avg_usage_7d": 3.0,
+                        "trend_direction": "up",
+                        "days_of_cover": 1.25,
+                        "inventory_value": 2250.0,
+                        "estimated_waste_cost": 90.0,
+                        "lead_time_demand": 13.2,
+                        "stock_gap_to_lead_demand": -8.2,
+                        "reorder_urgency_score": 88,
+                        "waste_risk_score": 42,
+                        "recommended_action": "RESTOCK_NOW",
+                    }
+                ],
+            )
+
+    client = TestClient(
+        create_app(supabase_store=ReadOnlySupabaseStore(), auth_user_resolver=_test_user_resolver)
+    )
+
+    response = client.get("/api/v1/analyses/latest", headers=_auth_headers())
+
+    assert response.status_code == 200
+    assert response.json()["analysis_id"] == "latest-for-user-1"
+
+
+def test_get_latest_analysis_falls_back_to_in_memory_when_supabase_latest_is_deleted():
+    class ReadOnlySupabaseStore:
+        def get_latest_analysis_id(self, user_id=None):
+            return "deleted-analysis-id"
+
+        def get(self, analysis_id, user_id=None):
+            raise KeyError(analysis_id)
+
+    app = create_app(supabase_store=ReadOnlySupabaseStore(), auth_user_resolver=_test_user_resolver)
+    app.state.store.create(
+        analysis_id="memory-analysis-id",
+        owner_id=TEST_USER_ID,
+        dataset_summary={
+            "row_count": 1,
+            "item_count": 1,
+            "date_range": {"start": "2025-06-12", "end": "2025-06-12"},
+        },
+        kpi_summary={
+            "item_count": 1,
+            "restock_now_count": 1,
+            "buy_less_count": 0,
+            "high_waste_risk_count": 0,
+            "inventory_value_at_risk": 0.0,
+            "top_urgent_items": ["Paneer"],
+            "top_waste_cost_items": ["Paneer"],
+        },
+        items=[
+            {
+                "item_id": 1,
+                "date": "2025-06-12",
+                "item_name": "Paneer",
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "unit": "kg",
+                "supplier_name": "Supplier A",
+                "current_stock": 5.0,
+                "reorder_level": 8.0,
+                "daily_usage": 4.0,
+                "lead_time": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "waste_percentage": 4.0,
+                "avg_usage_7d": 3.0,
+                "trend_direction": "up",
+                "days_of_cover": 1.25,
+                "inventory_value": 2250.0,
+                "estimated_waste_cost": 90.0,
+                "lead_time_demand": 13.2,
+                "stock_gap_to_lead_demand": -8.2,
+                "reorder_urgency_score": 88,
+                "waste_risk_score": 42,
+                "recommended_action": "RESTOCK_NOW",
+            }
+        ],
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/v1/analyses/latest", headers=_auth_headers())
+
+    assert response.status_code == 200
+    assert response.json()["analysis_id"] == "memory-analysis-id"
+
+
+def test_user_cannot_load_another_users_analysis():
+    class ReadOnlySupabaseStore:
+        def get(self, analysis_id, user_id=None):
+            raise KeyError(f"{analysis_id}:{user_id}")
+
+    client = TestClient(
+        create_app(supabase_store=ReadOnlySupabaseStore(), auth_user_resolver=_test_user_resolver)
+    )
+
+    response = client.get(
+        "/api/v1/analyses/55555555-5555-5555-5555-555555555555",
+        headers=_auth_headers(OTHER_TEST_USER_ID),
+    )
+
+    assert response.status_code == 404

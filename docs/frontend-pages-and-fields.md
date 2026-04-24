@@ -100,6 +100,7 @@ Show the ranked recommendation output after CSV upload or manual entry.
 
 ## Main Features
 - KPI summary cards
+- AI copilot panel with starter prompts, free-text input, and structured answer cards
 - Ranked item recommendation table
 - Action filters: `RESTOCK_NOW`, `BUY_LESS`, `DELAY_PURCHASE`, `MONITOR_CLOSELY`
 - Search by item name, category, supplier, or action
@@ -107,6 +108,7 @@ Show the ranked recommendation output after CSV upload or manual entry.
 - Navigate to records review/edit page
 - Open simulation modal/page for an item
 - Open explanation drawer/modal for an item
+- From simulation handoff, preload the AI copilot with the simulated item context and seeded prompt
 
 ## KPI Fields
 - `item_count`
@@ -143,6 +145,47 @@ Show the ranked recommendation output after CSV upload or manual entry.
 ## Recommended Display Priority
 - Always show: `item_name`, `recommended_action`, `current_stock`, `daily_usage`, `days_of_cover`, `reorder_urgency_score`, `waste_risk_score`
 - Show in expanded/details view: `price_per_unit`, `seasonal_factor`, `waste_percentage`, `inventory_value`, `estimated_waste_cost`, `lead_time_demand`, `stock_gap_to_lead_demand`
+
+## AI Copilot Panel
+
+## Purpose
+Let the owner ask analysis-scoped inventory questions without leaving the dashboard.
+
+## Backend Endpoint
+- `POST /api/v1/analyses/{analysis_id}/ai-chat`
+
+## Main Features
+- Starter prompt chips:
+  - `What should I buy today?`
+  - `Why is dairy risky this week?`
+  - `Which items can I delay to save cash?`
+- Free-text input
+- Session-only message history
+- Structured answer card with:
+  - `source`
+  - `scope`
+  - `answer`
+  - `supporting_points[]`
+  - `related_items[]`
+  - `suggested_follow_ups[]`
+  - optional `warning_flag`
+- Keep chat constrained to the current analysis and optional simulation context
+
+## Chat Request Fields
+- `message`
+- `recent_messages[]`
+- optional `simulation_context`:
+  - `item_id`
+  - `simulated_order_qty`
+
+## Chat Response Fields
+- `source`
+- `scope`
+- `answer`
+- `supporting_points[]`
+- `related_items[]`
+- `suggested_follow_ups[]`
+- `warning_flag`
 
 ## Page 3: Records Review and Edit Page
 
@@ -207,6 +250,7 @@ Let the owner test a reorder quantity before deciding what to buy.
 - Enter proposed reorder quantity
 - Show simulated cost, coverage, inventory value, waste cost, risk change, and updated recommendation
 - Allow user to compare current recommendation versus simulated result
+- Offer both `Explain This Result` and `Discuss This Simulation` after a simulation is available
 
 ## Input Fields
 - `simulated_order_qty`
@@ -236,6 +280,7 @@ Explain why the system recommended a specific action.
 - Optionally include the latest simulation context
 - Show whether the explanation came from `mock`, `live`, or `fallback`
 - Keep deterministic recommendation visible even if model explanation falls back
+- Keep explanation distinct from chat: explanation is the item-level reason, while chat is the broader operator follow-up surface
 
 ## Optional Request Fields
 - `simulated_order_qty`
@@ -332,5 +377,6 @@ Copy:
 - Records Review/Edit
 - Simulation Modal or Item Detail
 - Explanation Drawer
+- Dashboard AI Copilot
 
 Authentication, account settings, persistent history, and role management are outside the current MVP scope.
