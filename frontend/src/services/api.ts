@@ -1,12 +1,15 @@
 import axios, { AxiosInstance } from 'axios';
 import {
   AnalysisResponse,
+  ChatRequest,
+  ChatResponse,
   ExplanationRequest,
   ExplanationResponse,
   ManualItemInput,
   SimulationRequest,
   SimulationResponse,
 } from '@/types';
+import { supabase } from '@/lib/supabase';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -19,6 +22,18 @@ class ApiClient {
       headers: {
         'Content-Type': 'application/json',
       },
+    });
+
+    this.client.interceptors.request.use(async (config) => {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+
+      if (token) {
+        config.headers = config.headers ?? {};
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+
+      return config;
     });
   }
 
@@ -85,6 +100,17 @@ class ApiClient {
     const response = await this.client.post(
       `/api/v1/analyses/${analysisId}/items/${itemId}/explanation`,
       request || {}
+    );
+    return response.data;
+  }
+
+  async getAiChat(
+    analysisId: string,
+    request: ChatRequest
+  ): Promise<ChatResponse> {
+    const response = await this.client.post(
+      `/api/v1/analyses/${analysisId}/ai-chat`,
+      request
     );
     return response.data;
   }

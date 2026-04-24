@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { Button, Card, Alert, Input, Select } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
+import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { InventoryItem, ManualItemInput, PerishabilityLevel, UsagePeriod, RecommendedAction } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
@@ -50,6 +51,20 @@ export default function RecordsPage() {
 
       setItems(normalizedItems);
     } catch (err: any) {
+      if (err.response?.status === 404) {
+        clearLatestAnalysisId();
+        try {
+          const latest = await apiClient.getLatestAnalysis();
+          if (latest.analysis_id && latest.analysis_id !== analysisId) {
+            saveLatestAnalysisId(latest.analysis_id);
+            await router.replace(`/records/${latest.analysis_id}`);
+            return;
+          }
+        } catch {
+          await router.replace('/');
+          return;
+        }
+      }
       const message = err.response?.data?.message || err.message || 'Failed to fetch records';
       setError(message);
       toast.error(message);

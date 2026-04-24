@@ -1,7 +1,7 @@
 # StockWise Project Status
 
 ## Date
-- 2026-04-22
+- 2026-04-24
 
 ## Completed
 - Revised PRD and SAD created.
@@ -24,25 +24,31 @@
 - CSV imports now create/update `import_batches`; row-level persistence failures can be written to `import_row_errors`.
 - Manual observations now persist as `input_source = manual` without an import batch, while CSV observations persist as `input_source = import`.
 - Supabase item matching now uses owner-facing identity fields instead of item name only.
+- Authenticated `created_by` / `uploaded_by` wiring is now connected for user-owned writes when bearer-token auth is enabled.
+- New uploads and manual submissions now append to the authenticated user's persisted observation history and create a fresh merged snapshot from that full per-user history.
+- `items.owner_id` and `suppliers.owner_id` are now part of the source-of-truth persistence design so same-named reference data does not collide across accounts.
+- `GET /api/v1/analyses/latest` is now defined as latest-for-current-user instead of a global latest snapshot.
 - Explanation generation now uses the in-memory analysis item first, so Supabase network issues do not break explanation responses for the current analysis.
 - Frontend manual analysis requests now send the backend contract shape `{ items: [...] }`.
 - Supabase migration added for `analysis_runs` and `analysis_item_results`.
 - Supabase analysis snapshots now use `analysis_runs.analysis_id` as the API `analysis_id` when snapshot persistence is enabled.
 - `GET /api/v1/analyses/{analysis_id}` now falls back to Supabase snapshots after an in-memory cache miss.
+- Live GLM explanation generation verified through the configured ILMU OpenAI-compatible endpoint.
+- Live provider requests now use JSON mode, disable thinking, and allocate enough output tokens for the required explanation contract.
+- AI Inventory Copilot chat implemented on the dashboard with structured responses, simulation handoff, and deterministic fallback.
 - Automated tests added for services and API routes.
 - Documentation updated to reflect the shared input contract, CSV compatibility behavior, observation-history normalization, and Supabase persistence behavior.
 
 ## In Progress
-- Waiting for real `ZAI_API_KEY` to verify live provider against Z.AI.
 - Keeping markdown project memory current as implementation evolves.
 
 ## Blocked
-- Real `ZAI_API_KEY` has not been received yet, so live Z.AI integration cannot be verified.
+- None currently documented.
 
 ## Next
-- Review and apply `supabase/migrations/202604220001_create_analysis_snapshots.sql` to the live Supabase project with `supabase db push`.
-- Add authenticated `created_by` / `uploaded_by` wiring once Supabase auth/profile flow is connected.
+- Review and apply `supabase/migrations/202604220001_create_analysis_snapshots.sql` and `supabase/migrations/202604240001_add_user_ownership_to_items_and_suppliers.sql` to the live Supabase project with `supabase db push`.
 - Verify read-after-restart behavior against the live Supabase project after migration push.
 - Keep `docs/` in sync whenever schema, validation, or scoring inputs change.
-- When the real key arrives, verify `GLM_MODE=live` with the production request path.
-- Expand tests once real Z.AI response shape is confirmed.
+- Add a lightweight runtime status endpoint or settings display for `mock`, `live`, and `fallback` explanation state.
+- Expand integration smoke coverage around live-compatible provider response shape without requiring network in the default test suite.
+- Decide whether record edit/delete should stay snapshot-local or later become true persisted-observation mutation.

@@ -1,27 +1,30 @@
-import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
-import {
-    Home,
-    Upload,
-    FileText,
-    BarChart3,
-    FileCheck,
-    TrendingUp,
-    MessageSquare,
-    Database,
-    Settings,
-    Menu,
-    X,
-    History,
-} from 'lucide-react';
 import {
     getLatestAnalysisId,
     hydrateLatestAnalysisId,
     saveLatestAnalysisId,
     subscribeToLatestAnalysisId,
 } from '@/lib/analysisSession';
+import { useAuth } from '@/lib/auth';
 import { buildAnalysisNavigationTargets } from '@/lib/navigationTargets';
 import { apiClient } from '@/services/api';
+import {
+    BarChart3,
+    Database,
+    FileCheck,
+    FileText,
+    History,
+    Home,
+    LogOut,
+    Menu,
+    MessageSquare,
+    Settings,
+    TrendingUp,
+    Upload,
+    X
+} from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/router';
+import React, { useEffect, useState } from 'react';
 
 interface NavItemProps {
     icon: React.ReactNode;
@@ -79,11 +82,18 @@ interface NavigationBarProps {
 }
 
 export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemId, activeSection }: NavigationBarProps) {
+    const router = useRouter();
+    const { signOut } = useAuth();
     const [storedAnalysisId, setStoredAnalysisId] = useState<string | null>(null);
     const [mobileOpen, setMobileOpen] = useState(false);
     const [dataEntryOpen, setDataEntryOpen] = useState(false);
     const activeAnalysisId = currentAnalysisId || storedAnalysisId || undefined;
     const navigationTargets = buildAnalysisNavigationTargets(activeAnalysisId, currentItemId);
+
+    const handleLogout = async () => {
+        await signOut();
+        router.push('/login');
+    };
 
     useEffect(() => {
         let isMounted = true;
@@ -262,6 +272,17 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 onClick={closeMobile}
                 fullWidth
             />
+
+            <button
+                onClick={() => {
+                    closeMobile();
+                    handleLogout();
+                }}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-gray-700 hover:bg-gray-100 hover:text-gray-900 font-medium"
+            >
+                <LogOut className="w-5 h-5" />
+                <span className="font-medium">Logout</span>
+            </button>
         </>
     );
 

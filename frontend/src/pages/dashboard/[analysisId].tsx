@@ -2,22 +2,32 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { Search, Filter, TrendingUp, AlertCircle, DollarSign, Percent } from 'lucide-react';
 import { Button, Card, Input, Alert } from '@/components/common';
+import { AICopilotPanel } from '@/components/AICopilotPanel';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
-import { recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
+import { clearLatestAnalysisId, recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { AnalysisResponse, InventoryItem, RecommendedAction } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 
 export default function Dashboard() {
   const router = useRouter();
-  const { analysisId } = router.query;
+  const { analysisId, chatItemId, simulated, chatPrompt } = router.query;
 
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<RecommendedAction | 'ALL'>('ALL');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
+
+  const initialChatPrompt = Array.isArray(chatPrompt) ? chatPrompt[0] : chatPrompt;
+  const initialSimulationContext =
+    chatItemId && simulated
+      ? {
+        item_id: Number(Array.isArray(chatItemId) ? chatItemId[0] : chatItemId),
+        simulated_order_qty: Number(Array.isArray(simulated) ? simulated[0] : simulated),
+      }
+      : undefined;
 
   useEffect(() => {
     if (!analysisId) return;
@@ -38,6 +48,20 @@ export default function Dashboard() {
         label: `${response.items.length} items · ${response.kpi_summary.restock_now_count} to restock`,
       });
     } catch (err: any) {
+      if (err.response?.status === 404) {
+        clearLatestAnalysisId();
+        try {
+          const latest = await apiClient.getLatestAnalysis();
+          if (latest.analysis_id && latest.analysis_id !== analysisId) {
+            saveLatestAnalysisId(latest.analysis_id);
+            await router.replace(`/dashboard/${latest.analysis_id}`);
+            return;
+          }
+        } catch {
+          await router.replace('/');
+          return;
+        }
+      }
       const message = err.response?.data?.message || err.message || 'Failed to fetch analysis';
       setError(message);
       toast.error(message);
@@ -194,6 +218,21 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
+        <div className="mb-6">
+          <AICopilotPanel
+            analysisId={analysisId as string}
+            initialPrompt={typeof initialChatPrompt === 'string' ? initialChatPrompt : undefined}
+            initialSimulationContext={
+              initialSimulationContext &&
+                Number.isFinite(initialSimulationContext.item_id) &&
+                Number.isFinite(initialSimulationContext.simulated_order_qty)
+                ? initialSimulationContext
+                : undefined
+            }
+            onSendMessage={(request) => apiClient.getAiChat(analysisId as string, request)}
+          />
+        </div>
+
         {/* Filters */}
         <Card className="p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

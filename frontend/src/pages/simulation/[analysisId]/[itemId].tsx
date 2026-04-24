@@ -5,7 +5,7 @@ import { NavigationBar } from '@/components/Dashboard';
 import { ItemSimulation } from '@/components/ItemSimulation';
 import { apiClient } from '@/services/api';
 import { findInventoryItemByRouteId } from '@/lib/itemIdentity';
-import { buildSimulatedExplanationHref, runSimulationAndStore } from '@/lib/simulationFlow';
+import { buildSimulatedChatHref, buildSimulatedExplanationHref, runSimulationAndStore } from '@/lib/simulationFlow';
 import { InventoryItem, SimulationResponse } from '@/types';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
@@ -137,10 +137,15 @@ export default function SimulationPage() {
         </Card>
 
         {simulationResult && (
-          <div className="mt-6">
+          <div className="mt-6 grid gap-3 md:grid-cols-2">
             <Link href={buildSimulatedExplanationHref(analysisId, itemId, simulationResult.simulated_order_qty)}>
               <Button variant="primary" size="lg" className="w-full">
-                Get Explanation for Simulated Result
+                Explain This Result
+              </Button>
+            </Link>
+            <Link href={buildSimulatedChatHref(analysisId, itemId, simulationResult.simulated_order_qty)}>
+              <Button variant="outline" size="lg" className="w-full">
+                Discuss This Simulation
               </Button>
             </Link>
           </div>

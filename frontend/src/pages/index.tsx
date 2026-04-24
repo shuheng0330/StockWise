@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { Upload, FileText } from 'lucide-react';
@@ -8,14 +8,30 @@ import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
 import { recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { ManualItemInput } from '@/types';
+import { useAuth } from '@/lib/auth';
 import toast from 'react-hot-toast';
 
 export default function EntryPage() {
   const router = useRouter();
+  const { user, loading } = useAuth();
   const [mode, setMode] = useState<'upload' | 'manual' | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login');
+    }
+  }, [user, loading, router]);
+
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
+
+  if (!user) {
+    return null;
+  }
 
   const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
