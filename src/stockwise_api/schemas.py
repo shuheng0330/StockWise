@@ -94,7 +94,9 @@ class RecordItem(BaseModel):
     manual_reorder_level: float | None = None
     seasonal_factor: float
     recent_waste_percentage: float | None = None
-    recommended_action: Literal["RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"]
+    recommended_action: Literal[
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    ]
 
 
 class RecordsResponse(BaseModel):

@@ -18,6 +18,7 @@ export function InventoryItemForm({
       item_name: '',
       current_stock: 0,
       unit: '',
+      custom_unit: '',
       usage_value: 0,
       usage_period: 'daily',
       lead_time_days: 1,
@@ -57,6 +58,9 @@ export function InventoryItemForm({
       }
       if (!item.unit || !item.unit.trim()) {
         newErrors[`${index}-unit`] = 'Unit is required and cannot be blank';
+      }
+      if (item.unit === 'other' && !item.custom_unit?.trim()) {
+        newErrors[`${index}-custom_unit`] = 'Custom unit is required';
       }
       if (item.usage_value <= 0 || isNaN(item.usage_value)) {
         newErrors[`${index}-usage_value`] = 'Usage value must be a number > 0';
@@ -107,6 +111,7 @@ export function InventoryItemForm({
         item_name: '',
         current_stock: 0,
         unit: '',
+        custom_unit: '',
         usage_value: 0,
         usage_period: 'daily',
         lead_time_days: 1,
@@ -130,7 +135,13 @@ export function InventoryItemForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (validateItems()) {
-      onSubmit(items);
+      const finalItems: ManualItemInput[] = items.map(item => ({
+        ...item,
+        unit: item.unit === 'other'
+          ? item.custom_unit!
+          : item.unit
+      }));
+      onSubmit(finalItems);
     }
   };
 
@@ -180,14 +191,35 @@ export function InventoryItemForm({
               onChange={(e) => handleItemChange(index, 'current_stock', parseFloat(e.target.value) || 0)}
               error={errors[`${index}-current_stock`]}
             />
-            <Input
+            <Select
               label="Unit *"
-              help="The unit of measure for this item (e.g., liter, kg, pieces, box). Used consistently across stock and usage."
-              placeholder="e.g., liter, kg, pieces"
               value={item.unit}
               onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
               error={errors[`${index}-unit`]}
+              options={[
+                { value: 'kg', label: 'Kilogram (kg)' },
+                { value: 'g', label: 'Gram (g)' },
+                { value: 'liter', label: 'Liter (L)' },
+                { value: 'ml', label: 'Milliliter (ml)' },
+                { value: 'pcs', label: 'Pieces (pcs)' },
+                { value: 'pack', label: 'Pack' },
+                { value: 'box', label: 'Box' },
+                { value: 'bottle', label: 'Bottle' },
+                { value: 'can', label: 'Can' },
+                { value: 'tray', label: 'Tray' },
+                { value: 'dozen', label: 'Dozen' },
+                { value: 'other', label: 'Other (specify manually)' },
+              ]}
             />
+            {item.unit === 'other' && (
+              <Input
+                label="Custom Unit"
+                placeholder="e.g., carton, bag"
+                value={item.custom_unit || ''}
+                onChange={(e) => handleItemChange(index, 'custom_unit', e.target.value)}
+                error={errors[`${index}-custom_unit`]}
+              />
+            )}
             <Input
               label="Usage Value *"
               help="Typical quantity consumed per usage period (e.g., 5 liters per day). Drives demand forecasting."
