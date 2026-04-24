@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertCircle, CheckCircle, Info } from 'lucide-react';
+import { AlertCircle, CheckCircle, Info, HelpCircle } from 'lucide-react';
 
 interface AlertProps {
   type: 'error' | 'success' | 'info' | 'warning';
@@ -58,6 +58,7 @@ export function Button({
   size = 'md',
   loading = false,
   children,
+  className = '',
   ...props
 }: ButtonProps) {
   const baseClass = 'font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -77,7 +78,7 @@ export function Button({
 
   return (
     <button
-      className={`${baseClass} ${variantClass[variant]} ${sizeClass[size]}`}
+      className={`${baseClass} ${variantClass[variant]} ${sizeClass[size]} ${className}`.trim()}
       disabled={loading || props.disabled}
       {...props}
     >
@@ -86,15 +87,51 @@ export function Button({
   );
 }
 
+interface HelpTooltipProps {
+  text: string;
+  className?: string;
+}
+
+export function HelpTooltip({ text, className = '' }: HelpTooltipProps) {
+  return (
+    <span className={`relative inline-flex items-center group align-middle ${className}`.trim()}>
+      <button
+        type="button"
+        tabIndex={0}
+        aria-label="Help"
+        className="inline-flex items-center justify-center w-4 h-4 text-gray-400 hover:text-blue-600 focus:text-blue-600 focus:outline-none"
+      >
+        <HelpCircle className="w-4 h-4" />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 w-64 max-w-xs px-3 py-2 rounded-md bg-gray-900 text-white text-xs leading-snug shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity duration-150"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function FieldLabel({ label, help }: { label: string; help?: string }) {
+  return (
+    <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1">
+      <span>{label}</span>
+      {help && <HelpTooltip text={help} />}
+    </label>
+  );
+}
+
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
+  help?: string;
 }
 
-export function Input({ label, error, ...props }: InputProps) {
+export function Input({ label, error, help, ...props }: InputProps) {
   return (
     <div className="w-full">
-      {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+      {label && <FieldLabel label={label} help={help} />}
       <input
         {...props}
         className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none ${
@@ -109,20 +146,30 @@ export function Input({ label, error, ...props }: InputProps) {
 interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
   error?: string;
+  help?: string;
+  placeholder?: string;
   options: Array<{ value: string; label: string }>;
 }
 
-export function Select({ label, error, options, ...props }: SelectProps) {
+export function Select({ label, error, help, options, placeholder = 'Select an option', value, ...props }: SelectProps) {
+  const selectedValue = value as string | number | undefined;
+  const hasSelection =
+    selectedValue !== undefined &&
+    selectedValue !== null &&
+    String(selectedValue) !== '' &&
+    options.some((opt) => opt.value === String(selectedValue));
+
   return (
     <div className="w-full">
-      {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+      {label && <FieldLabel label={label} help={help} />}
       <select
         {...props}
+        value={value}
         className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none ${
           error ? 'border-red-500' : 'border-gray-300'
         }`}
       >
-        <option value="">Select an option</option>
+        {!hasSelection && <option value="">{placeholder}</option>}
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>
             {opt.label}

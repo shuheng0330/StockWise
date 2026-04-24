@@ -6,7 +6,7 @@ import { Button, Alert, Card } from '@/components/common';
 import { InventoryItemForm } from '@/components/InventoryItemForm';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
-import { saveLatestAnalysisId } from '@/lib/analysisSession';
+import { recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { ManualItemInput } from '@/types';
 import { useAuth } from '@/lib/auth';
 import toast from 'react-hot-toast';
@@ -48,6 +48,11 @@ export default function EntryPage() {
     try {
       const response = await apiClient.uploadCsv(file);
       saveLatestAnalysisId(response.analysis_id);
+      recordAnalysisInHistory({
+        analysisId: response.analysis_id,
+        label: file.name,
+        source: 'upload',
+      });
       toast.success('Analysis created successfully!');
       router.push(`/dashboard/${response.analysis_id}`);
     } catch (err: any) {
@@ -66,6 +71,15 @@ export default function EntryPage() {
     try {
       const response = await apiClient.createManualAnalysis(items);
       saveLatestAnalysisId(response.analysis_id);
+      const previewLabel =
+        items.length === 1
+          ? items[0].item_name || 'Manual entry'
+          : `Manual entry (${items.length} items)`;
+      recordAnalysisInHistory({
+        analysisId: response.analysis_id,
+        label: previewLabel,
+        source: 'manual',
+      });
       toast.success('Analysis created successfully!');
       router.push(`/dashboard/${response.analysis_id}`);
     } catch (err: any) {
@@ -87,9 +101,9 @@ export default function EntryPage() {
 
       <div className="max-w-4xl mx-auto p-4 md:p-8">
         {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">StockWise</h1>
-          <p className="text-xl text-gray-600">Intelligent Inventory Analysis & Recommendations</p>
+        <div className="text-center mb-8 md:mb-12">
+          <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">StockWise</h1>
+          <p className="text-base md:text-xl text-gray-600">Intelligent Inventory Analysis & Recommendations</p>
         </div>
 
         {/* Mode Selection or Selected Mode */}

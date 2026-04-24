@@ -9,5 +9,6 @@ export function buildAnalysisNavigationTargets(
     recordsHref: analysisId ? `/records/${analysisId}` : undefined,
     simulationHref: analysisId && hasItem ? `/simulation/${analysisId}/${itemId}` : undefined,
     explanationHref: analysisId && hasItem ? `/explanation/${analysisId}/${itemId}` : undefined,
+    exportHref: analysisId ? `/export/${analysisId}` : undefined,
   };
 }
