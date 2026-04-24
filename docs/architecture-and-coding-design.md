@@ -27,6 +27,7 @@
 - Record delete endpoint removes one item and returns the remaining record set.
 - Simulation endpoint returns scenario metrics and updated action.
 - Explanation endpoint returns `live`, `mock`, or `fallback` explanation payload.
+- AI chat endpoint returns `live`, `mock`, or `fallback` chat cards scoped to the current analysis or a simulation handoff.
 
 ## Canonical Input Flow
 - `src/stockwise_api/contracts.py` defines the canonical item contract shared by manual entry, CSV ingestion, and record updates.
@@ -77,22 +78,27 @@
 - `src/stockwise_api/store.py` contains `SupabaseAnalysisStore.persist_observations`.
 - `POST /api/v1/analyses` passes validated CSV rows to `persist_observations` with `source_type = import`, `file_name`, and `file_type = csv`.
 - `POST /api/v1/manual-analyses` passes submitted manual rows to `persist_observations` with `source_type = manual`.
+- API create routes resolve the authenticated Supabase user from the bearer token before any user-scoped read or write.
+- `inventory_records.created_by`, `import_batches.uploaded_by`, and `analysis_runs.created_by` are the authoritative per-user ownership fields.
 - Persistence normalizes each source observation through the same canonical manual normalization path used by analysis.
 - Import persistence creates one `import_batches` row before row inserts and updates it to `success`, `partial`, or `failed`.
 - Each persisted observation creates one `inventory_records` row; historical CSVs therefore store all source rows, not just grouped latest rows.
 - Import row persistence failures are recorded in `import_row_errors` when an import batch exists.
-- Suppliers are matched or inserted by `supplier_name`; normalized missing or `Unknown` suppliers remain nullable.
-- Items are matched by `item_name`, `unit`, `category`, `subcategory`, and `supplier_id` to avoid merging different owner-facing items with the same name.
+- `items.owner_id` and `suppliers.owner_id` scope reference data to one authenticated user.
+- Suppliers are matched or inserted by `supplier_name + owner_id`; normalized missing or `Unknown` suppliers remain nullable.
+- Items are matched by `owner_id + item_name + unit + category + subcategory + supplier_id` to avoid merging different owner-facing items with the same name across accounts.
 - Supabase writes are best-effort for the MVP. Analysis responses are still generated from the deterministic in-memory analysis record if persistence fails.
 
 ## Supabase Analysis Snapshot Flow
 - Migration file: `supabase/migrations/202604220001_create_analysis_snapshots.sql`.
+- Ownership migration file: `supabase/migrations/202604240001_add_user_ownership_to_items_and_suppliers.sql`.
 - `analysis_runs` stores one row per analysis and owns the API-level `analysis_id` when Supabase snapshots are enabled.
 - `analysis_item_results` stores the ranked point-in-time recommendation rows for each analysis.
 - `analysis_item_results.app_item_id` preserves the current frontend/API integer item ID used by records, simulation, and explanation routes.
 - `analysis_item_results.item_id` and `latest_record_id` link to Supabase `items` and `inventory_records` when observation persistence returns those IDs; both remain nullable for offline/test paths.
-- API create endpoints persist observations, collapse and rank the analysis, then persist an analysis snapshot and use the returned `analysis_id` in the in-memory cache.
-- `GET /api/v1/analyses/{analysis_id}` reads from the in-memory cache first, then falls back to `SupabaseAnalysisStore.get`.
+- API create endpoints persist the submitted observations, reload the authenticated user's full persisted observation history, collapse and rank that merged history, then persist a new analysis snapshot and use the returned `analysis_id` in the in-memory cache.
+- `GET /api/v1/analyses/latest` resolves the latest snapshot for the authenticated user only.
+- `GET /api/v1/analyses/{analysis_id}` reads from the in-memory cache first, then falls back to `SupabaseAnalysisStore.get`, enforcing snapshot ownership when a user ID is present.
 - To apply schema changes to the live Supabase project, run `supabase link --project-ref fujcmskmahkvyulzxvuy` and `supabase db push` after reviewing the migration.
 
 ## Metrics and Thresholds
@@ -128,6 +134,8 @@
 - System prompt is constrained and JSON-only.
 - Only structured item context is sent to the provider.
 - Context includes item identity, current metrics, derived metrics, recent context, and optional simulation context.
+- Live provider requests use `response_format = {"type": "json_object"}`, `thinking = {"type": "disabled"}`, and a bounded output token budget so GLM responses land in `message.content` as parseable JSON.
+- AI copilot chat uses the same live provider path but a separate inventory-copilot prompt and a compact analysis summary instead of the explanation-only item contract.
 
 ## Parser and Fallback Flow
 - Parse JSON
@@ -135,12 +143,16 @@
 - Check item match and unsupported claims
 - Retry once on malformed response
 - Fall back to deterministic template if still invalid
+- AI copilot chat follows the same pattern with its own schema validation for `scope`, `supporting_points`, `related_items`, and `suggested_follow_ups`.
 
 ## Runtime Notes
 - App factory: `stockwise_api.api.app:create_app`
 - `create_app` accepts an injectable `supabase_store` for tests and local integration seams.
 - Default provider mode: `mock`
 - Live provider fails fast at startup if `GLM_MODE=live` and `ZAI_API_KEY` is missing
+- The current live configuration uses the ILMU OpenAI-compatible chat-completions endpoint with `ZAI_BASE_URL=https://api.ilmu.ai/v1/chat/completions` and `ZAI_MODEL=ilmu-glm-5.1`.
+- `POST /api/v1/analyses/{analysis_id}/ai-chat` loads the authenticated user's current analysis snapshot, trims ranked items into a compact prompt context, and optionally adds one server-computed simulation comparison when `simulation_context` is provided.
+- Off-topic AI chat requests are refused deterministically instead of being forwarded to the model.
 - CSV uploads preserve source `item_id` values when present and collapse repeated historical observations into one latest item per source item.
 - Manual analysis requests can include repeated dated entries for the same owner-facing item; those entries collapse into one latest item with trend-aware metrics.
 - `dataset_summary.row_count` reports source observations; `dataset_summary.item_count` reports grouped analyzed items.

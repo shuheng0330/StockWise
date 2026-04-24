@@ -57,6 +57,11 @@ export function saveLatestAnalysisId(analysisId: string | null | undefined) {
   notifyLatestAnalysisId(normalized);
 }
 
+export function clearLatestAnalysisId() {
+  getStorage()?.removeItem(LATEST_ANALYSIS_ID_KEY);
+  notifyLatestAnalysisId(null);
+}
+
 export async function hydrateLatestAnalysisId(
   fetchLatestAnalysisId: () => Promise<string | null | undefined>
 ): Promise<string | null> {

@@ -89,6 +89,39 @@ export interface ExplanationResponse {
   warning_flag: string;
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatSimulationContext {
+  item_id: number;
+  simulated_order_qty: number;
+}
+
+export interface ChatRequest {
+  message: string;
+  recent_messages: ChatMessage[];
+  simulation_context?: ChatSimulationContext;
+}
+
+export interface ChatRelatedItem {
+  item_id: number;
+  item_name: string;
+  recommended_action: RecommendedAction;
+  reason: string;
+}
+
+export interface ChatResponse {
+  source: 'mock' | 'live' | 'fallback';
+  scope: 'analysis' | 'simulation';
+  answer: string;
+  supporting_points: string[];
+  related_items: ChatRelatedItem[];
+  suggested_follow_ups: string[];
+  warning_flag?: string | null;
+}
+
 export interface ManualItemInput {
   item_name: string;
   current_stock: number;

@@ -1,4 +1,4 @@
-import { buildSimulatedExplanationHref, runSimulationAndStore } from './simulationFlow';
+import { buildSimulatedChatHref, buildSimulatedExplanationHref, runSimulationAndStore } from './simulationFlow';
 import { SimulationResponse } from '@/types';
 
 const simulationResult: SimulationResponse = {
@@ -28,6 +28,12 @@ describe('simulation flow', () => {
   it('builds a simulated explanation route for the same item', () => {
     expect(buildSimulatedExplanationHref('analysis-1', '10', 12)).toBe(
       '/explanation/analysis-1/10?simulated=12'
+    );
+  });
+
+  it('builds a simulated chat handoff route back to the dashboard', () => {
+    expect(buildSimulatedChatHref('analysis-1', '10', 12)).toBe(
+      '/dashboard/analysis-1?chatItemId=10&simulated=12&chatPrompt=What%20changed%20after%20my%20simulation%3F'
     );
   });
 });

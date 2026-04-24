@@ -1,11 +1,11 @@
 # StockWise Project Requirements
 
 ## Accepted MVP Scope
-- FastAPI backend for CSV ingestion, analysis, simulation, and explanation.
+- FastAPI backend for CSV ingestion, analysis, simulation, explanation, and AI copilot chat.
 - Owner-friendly manual entry flow on the same frontend entry page as CSV upload.
 - Inventory records review/edit/delete flow for entered or uploaded items.
 - Stable API contracts for frontend integration.
-- Mock Z.AI provider until the real `ZAI_API_KEY` is available.
+- Mock provider for offline development and live OpenAI-compatible GLM provider for explanation generation.
 - Supabase persistence for source inventory observations, suppliers, items, and CSV import batches.
 - In-memory analysis storage keyed by `analysis_id` remains the fast response cache for the current hackathon API flow.
 
@@ -25,11 +25,13 @@
 - `DELETE /api/v1/analyses/{analysis_id}/items/{item_id}`
 - `POST /api/v1/analyses/{analysis_id}/items/{item_id}/simulate`
 - `POST /api/v1/analyses/{analysis_id}/items/{item_id}/explanation`
+- `POST /api/v1/analyses/{analysis_id}/ai-chat`
 
 ## Canonical Input Contract
 - CSV upload and manual entry now converge into one canonical item contract before normalization and scoring.
 - CSV rows and manual daily entries are treated as inventory observations.
 - Source observations should be persisted before history collapse so uploaded datasets and manual daily entries remain reconstructable.
+- Each new upload or manual submission should append to the authenticated user's persisted observation history and create a fresh snapshot from that full per-user history.
 - Analysis output collapses observations by item identity and returns one latest ranked item per item.
 - Recommendation scores must be derived only from normalized canonical fields, not from per-entry-mode parsing rules.
 - Record edits also reuse the same owner-facing field set so post-upload changes stay aligned with scoring inputs.
@@ -84,10 +86,13 @@
 - CSV uploads insert every validated source row into `inventory_records` with `input_source = import` and the related `import_batch_id`.
 - Manual entries insert every submitted source row into `inventory_records` with `input_source = manual` and `import_batch_id = null`.
 - `record_date` must come from the canonical `date` value, defaulting to the current day only when the user did not provide a date.
-- `items` are matched by owner-facing identity, not by name only: `item_name`, `unit`, `category`, `subcategory`, and supplier identity.
-- `suppliers` are created or reused by `supplier_name` when a real supplier name is provided. Missing or normalized `Unknown` suppliers leave `supplier_id = null`.
+- Persistent data is private per authenticated user. `items`, `suppliers`, `inventory_records`, `import_batches`, and `analysis_runs` are all user-owned.
+- `items` are matched by owner-facing identity, not by name only: `owner_id`, `item_name`, `unit`, `category`, `subcategory`, and supplier identity.
+- `suppliers` are created or reused by `owner_id + supplier_name` when a real supplier name is provided. Missing or normalized `Unknown` suppliers leave `supplier_id = null`.
+- Upload and manual submit flows should persist the new source rows first, then rebuild the analysis from the authenticated user's full persisted observation history.
 - When Supabase persistence is enabled, `analysis_runs.analysis_id` is the API `analysis_id` returned to the frontend.
 - `analysis_item_results` stores point-in-time recommendation snapshots for each ranked item in an analysis.
+- `GET /api/v1/analyses/latest` returns the latest snapshot for the current authenticated user only.
 - `GET /api/v1/analyses/{analysis_id}` should read from in-memory cache first and fall back to Supabase snapshot tables when needed.
 - Supabase persistence failures should not break deterministic analysis responses during the MVP.
 
@@ -117,6 +122,14 @@
   - `suggested_next_step`
   - `confidence_note`
   - `warning_flag`
+- AI copilot chat returns:
+  - `source`
+  - `scope`
+  - `answer`
+  - `supporting_points[]`
+  - `related_items[]` with `item_id`, `item_name`, `recommended_action`, and `reason`
+  - `suggested_follow_ups[]`
+  - `warning_flag`
 - Records endpoint returns:
   - `analysis_id`
   - `dataset_summary`
@@ -126,17 +139,22 @@
   - updated item record with owner-facing fields plus current `recommended_action`
 
 ## Current GLM Mode
-- `mock`
-- `live` mode is implemented as a provider path but still blocked by missing `ZAI_API_KEY`.
+- Local development can use `mock`.
+- The current configured live provider uses `GLM_MODE=live`, `ZAI_BASE_URL=https://api.ilmu.ai/v1/chat/completions`, and `ZAI_MODEL=ilmu-glm-5.1`.
+- Live explanation generation has been verified through the production request path; invalid or unavailable model output still falls back to deterministic explanations.
+- The same provider path now also supports AI copilot chat with a structured JSON response and deterministic fallback.
 
 ## User-Visible Success Criteria
 - Upload the provided inventory CSV and receive ranked actions and KPI summaries.
 - Upload the provided 100-day inventory CSV and see the dashboard collapse it into the latest item-level recommendations instead of duplicate daily rows.
 - Enter inventory manually without needing technical CSV fields like `Waste_Percentage` or `Reorder_Level`.
 - Enter repeated manual daily records for the same item and have them contribute to trend-aware analysis.
+- Upload a CSV, then add manual records later, and see the next dashboard/records view reflect the merged current history for that same authenticated user instead of replacing the earlier data.
 - Receive the same validation rules and scoring behavior whether data comes from CSV upload or manual entry.
 - Provide the score-driving inputs directly instead of relying on backend defaults for pricing, seasonality, or waste signals.
 - Review, edit, and delete records before relying on the decision dashboard.
 - Simulate reorder quantity changes for a chosen item.
 - Receive a safe explanation payload even when model output is invalid.
 - Keep deterministic rankings visible when explanation generation fails.
+- Ask the AI copilot grounded questions about the current analysis, including what to buy today, which items to delay, and why a category looks risky.
+- From the simulation flow, hand off a simulated result back into the dashboard AI copilot and ask what changed after the scenario.

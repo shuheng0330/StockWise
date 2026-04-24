@@ -1,5 +1,6 @@
-from dataclasses import asdict, is_dataclass
+from dataclasses import is_dataclass
 from datetime import date
+from typing import Callable
 import os
 from queue import Empty, Queue
 from threading import Thread
@@ -12,6 +13,8 @@ from dotenv import load_dotenv
 
 from stockwise_api.schemas import (
     AnalysisResponse,
+    ChatRequest,
+    ChatResponse,
     ErrorEnvelope,
     ExplanationRequest,
     ExplanationResponse,
@@ -22,7 +25,11 @@ from stockwise_api.schemas import (
     RecordUpdateRequest,
     RecordsResponse,
 )
-from stockwise_api.services.glm import build_explanation_context, provider_from_env
+from stockwise_api.services.glm import (
+    build_explanation_context,
+    build_inventory_chat_context,
+    provider_from_env,
+)
 from stockwise_api.services.manual_input import (
     ManualInputValidationError,
     item_to_record_view,
@@ -30,8 +37,11 @@ from stockwise_api.services.manual_input import (
     normalize_manual_items,
 )
 from stockwise_api.services.parsing import (
+    ChatValidationError,
+    build_fallback_chat_response,
     ExplanationValidationError,
     build_fallback_explanation,
+    parse_chat_response,
     parse_explanation_response,
 )
 from stockwise_api.services.recommendations import (
@@ -61,8 +71,8 @@ def _safe_error(
     )
 
 
-def _analysis_payload(store, analysis_id: str) -> dict:
-    record = store.get(analysis_id)
+def _analysis_payload(store, analysis_id: str, owner_id: str | None = None) -> dict:
+    record = store.get(analysis_id, owner_id=owner_id)
     return _analysis_record_payload(analysis_id, record)
 
 
@@ -75,8 +85,8 @@ def _analysis_record_payload(analysis_id: str, record) -> dict:
     }
 
 
-def _records_payload(store, analysis_id: str) -> dict:
-    record = store.get(analysis_id)
+def _records_payload(store, analysis_id: str, owner_id: str | None = None) -> dict:
+    record = store.get(analysis_id, owner_id=owner_id)
     return _records_payload_from_record(analysis_id, record)
 
 
@@ -89,21 +99,54 @@ def _records_payload_from_record(analysis_id: str, record) -> dict:
     }
 
 
-def _load_analysis_record(app: FastAPI, analysis_id: str):
+def _call_store_get(store, analysis_id: str, user_id: str | None):
+    if user_id is None:
+        return store.get(analysis_id)
     try:
-        return app.state.store.get(analysis_id)
+        return store.get(analysis_id, user_id)
+    except TypeError:
+        return store.get(analysis_id)
+
+
+def _call_store_get_latest_analysis_id(store, user_id: str | None):
+    if user_id is None:
+        return store.get_latest_analysis_id()
+    try:
+        return store.get_latest_analysis_id(user_id)
+    except TypeError:
+        return store.get_latest_analysis_id()
+
+
+def _resolve_latest_analysis_id(app: FastAPI, user_id: str | None = None) -> str:
+    supabase_store = app.state.supabase_store
+    if supabase_store is not None and hasattr(supabase_store, "get_latest_analysis_id"):
+        try:
+            analysis_id = _call_store_get_latest_analysis_id(supabase_store, user_id)
+            _call_store_get(supabase_store, analysis_id, user_id)
+            return analysis_id
+        except Exception:
+            pass
+    if hasattr(app.state.store, "get_latest_analysis_id"):
+        return _call_store_get_latest_analysis_id(app.state.store, user_id)
+    raise KeyError("No saved analysis found.")
+
+
+def _load_analysis_record(app: FastAPI, analysis_id: str, user_id: str | None = None):
+    try:
+        return app.state.store.get(analysis_id, owner_id=user_id)
     except KeyError:
         pass
 
     supabase_store = app.state.supabase_store
     if supabase_store is not None and hasattr(supabase_store, "get"):
         try:
-            analysis = supabase_store.get(analysis_id)
+            analysis = _call_store_get(supabase_store, analysis_id, user_id)
             app.state.store.create(
                 dataset_summary=analysis.dataset_summary,
                 kpi_summary=analysis.kpi_summary,
                 items=analysis.items,
                 analysis_id=analysis_id,
+                owner_id=user_id,
             )
             return analysis
         except Exception:
@@ -112,20 +155,100 @@ def _load_analysis_record(app: FastAPI, analysis_id: str):
     raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found.")
 
 
-def _load_analysis_item(app: FastAPI, analysis_id: str, item_id: int) -> dict:
-    record = _load_analysis_record(app, analysis_id)
+def _load_analysis_item(app: FastAPI, analysis_id: str, item_id: int, user_id: str | None = None) -> dict:
+    record = _load_analysis_record(app, analysis_id, user_id=user_id)
     for item in record.items:
         if int(item["item_id"]) == int(item_id):
             return item
     raise HTTPException(status_code=404, detail=f"Unknown item_id: {item_id}")
 
 
-def _date_range_from_manual_items(items: list[dict]) -> dict:
+def _date_range_from_observations(items: list[dict]) -> dict:
     today = date.today().isoformat()
     dates = sorted(str(item.get("date") or today) for item in items)
     return {
         "start": dates[0] if dates else today,
         "end": dates[-1] if dates else today,
+    }
+
+
+def _normalize_chat_message(message: str) -> str:
+    return " ".join(message.strip().split())
+
+
+def _is_supported_inventory_chat_message(message: str) -> bool:
+    normalized = _normalize_chat_message(message).lower()
+    if not normalized:
+        return False
+    off_topic_markers = {
+        "joke",
+        "football",
+        "soccer",
+        "weather",
+        "movie",
+        "politics",
+        "election",
+        "recipe",
+        "poem",
+        "song",
+    }
+    return not any(marker in normalized for marker in off_topic_markers)
+
+
+def _build_related_chat_items(items: list[dict], message: str) -> list[dict]:
+    normalized = message.lower()
+    ranked = sorted(
+        items,
+        key=lambda item: (
+            int(item.get("recommended_action") == "RESTOCK_NOW") * 200
+            + int(item.get("recommended_action") == "BUY_LESS") * 180
+            + int(item.get("recommended_action") == "DELAY_PURCHASE") * 120
+            + int(item.get("reorder_urgency_score", 0))
+            + int(item.get("waste_risk_score", 0))
+        ),
+        reverse=True,
+    )
+    matched = [
+        item
+        for item in items
+        if item["item_name"].lower() in normalized
+        or (str(item.get("category", "")).strip() and str(item.get("category", "")).lower() in normalized)
+        or (str(item.get("subcategory", "")).strip() and str(item.get("subcategory", "")).lower() in normalized)
+        or (str(item.get("supplier_name", "")).strip() and str(item.get("supplier_name", "")).lower() in normalized)
+    ]
+    selected = (matched or ranked)[:3]
+    related = []
+    for item in selected:
+        if item["recommended_action"] == "RESTOCK_NOW":
+            reason = "Current stock does not comfortably cover near-term demand."
+        elif item["recommended_action"] == "BUY_LESS":
+            reason = "Waste risk is high relative to the current stock position."
+        elif item["recommended_action"] == "DELAY_PURCHASE":
+            reason = "Coverage is healthy enough to delay the next purchase."
+        else:
+            reason = "Signals are mixed, so this item should stay under review."
+        related.append(
+            {
+                "item_id": int(item["item_id"]),
+                "item_name": item["item_name"],
+                "recommended_action": item["recommended_action"],
+                "reason": reason,
+            }
+        )
+    return related
+
+
+def _build_simulation_chat_context(item: dict, simulated_order_qty: float) -> dict:
+    simulated = simulate_item_quantity(item, simulated_order_qty)
+    return {
+        "item_id": int(item["item_id"]),
+        "item_name": item["item_name"],
+        "simulated_order_qty": simulated["simulated_order_qty"],
+        "simulated_cash_outlay": simulated["simulated_cash_outlay"],
+        "simulated_coverage_days": simulated["simulated_coverage_days"],
+        "simulated_risk_change": simulated["simulated_risk_change"],
+        "current_recommended_action": item["recommended_action"],
+        "simulated_recommended_action": simulated["recommended_action"],
     }
 
 
@@ -138,6 +261,7 @@ def _save_analysis(
     supabase_store=None,
     source_type: str | None = None,
     import_batch_id: str | None = None,
+    owner_id: str | None = None,
 ) -> str:
     ranked_items = build_ranked_analysis(items)
     kpis = build_kpi_summary(ranked_items)
@@ -152,6 +276,7 @@ def _save_analysis(
                         ranked_items=ranked_items,
                         source_type=source_type or "manual",
                         import_batch_id=import_batch_id,
+                        created_by=owner_id,
                     ),
                     lambda: None,
                 )
@@ -162,9 +287,16 @@ def _save_analysis(
             kpi_summary=kpis,
             items=ranked_items,
             analysis_id=snapshot_id,
+            owner_id=owner_id,
         )
     else:
-        store.update(analysis_id=analysis_id, dataset_summary=dataset_summary, kpi_summary=kpis, items=ranked_items)
+        store.update(
+            analysis_id=analysis_id,
+            dataset_summary=dataset_summary,
+            kpi_summary=kpis,
+            items=ranked_items,
+            owner_id=owner_id,
+        )
     return analysis_id
 
 
@@ -252,6 +384,34 @@ def _build_supabase_store(enable_supabase: bool | None):
     return SupabaseAnalysisStore(supabase_client)
 
 
+def _build_supabase_auth_resolver(enable_supabase: bool | None) -> Callable[[str], str | None] | None:
+    if not _supabase_enabled(enable_supabase):
+        return None
+
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        return None
+
+    supabase_client: Client = create_client(
+        supabase_url=supabase_url,
+        supabase_key=supabase_key,
+        options=ClientOptions(postgrest_client_timeout=_supabase_http_timeout_seconds()),
+    )
+
+    def resolve_user_id(token: str) -> str | None:
+        if not token:
+            return None
+        try:
+            user_response = supabase_client.auth.get_user(token)
+            user = getattr(user_response, "user", None)
+            return getattr(user, "id", None)
+        except Exception:
+            return None
+
+    return resolve_user_id
+
+
 def _persist_observations(
     supabase_store,
     observations: list[dict],
@@ -259,6 +419,8 @@ def _persist_observations(
     source_type: str,
     file_name: str | None = None,
     file_type: str | None = None,
+    uploaded_by: str | None = None,
+    created_by: str | None = None,
 ) -> dict:
     if supabase_store is None:
         return {"import_batch_id": None, "successful_rows": 0, "failed_rows": 0}
@@ -272,6 +434,8 @@ def _persist_observations(
                 source_type=source_type,
                 file_name=file_name,
                 file_type=file_type,
+                uploaded_by=uploaded_by,
+                created_by=created_by,
             ),
             lambda: fallback_result.copy(),
         )
@@ -297,7 +461,47 @@ def _attach_supabase_record_links(items: list[dict], persistence_result: dict) -
     return linked_items
 
 
-def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | None = None) -> FastAPI:
+def _latest_records_by_history_identity_from_observations(observations: list[dict]) -> dict:
+    latest_records: dict[str, dict] = {}
+    for observation in observations:
+        history_identity = observation.get("_history_identity")
+        if history_identity is None:
+            continue
+        latest_records[history_identity] = {
+            "item_id": observation.get("_supabase_item_id"),
+            "record_id": observation.get("_latest_record_id"),
+        }
+    return latest_records
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    header = request.headers.get("Authorization")
+    if not header:
+        return None
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token or None
+
+
+def _require_authenticated_user(app: FastAPI, request: Request) -> str | None:
+    resolver = getattr(app.state, "auth_user_resolver", None)
+    if resolver is None:
+        return None
+    token = _extract_bearer_token(request)
+    user_id = resolver(token or "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication is required.")
+    return user_id
+
+
+def create_app(
+    glm_provider=None,
+    supabase_store=None,
+    enable_supabase: bool | None = None,
+    auth_user_resolver: Callable[[str], str | None] | None = None,
+) -> FastAPI:
     load_dotenv()  # Load environment variables from .env file
 
     app = FastAPI(title="StockWise Backend", version="0.1.0")
@@ -320,6 +524,7 @@ def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | N
     app.state.store = InMemoryAnalysisStore()
     app.state.supabase_store = supabase_store if supabase_store is not None else _build_supabase_store(enable_supabase)
     app.state.glm_provider = glm_provider or provider_from_env()
+    app.state.auth_user_resolver = auth_user_resolver or _build_supabase_auth_resolver(enable_supabase)
 
     @app.exception_handler(ValidationError)
     async def handle_validation_error(_: Request, exc: ValidationError):
@@ -337,41 +542,67 @@ def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | N
     ):
         return _safe_error(400, "explanation_validation_error", str(exc))
 
-    @app.get("/api/v1/analyses/latest", response_model=AnalysisResponse)
-    async def get_latest_analysis():
-        supabase_store = app.state.supabase_store
-        if supabase_store is None or not hasattr(supabase_store, "get_latest_analysis_id"):
-            raise HTTPException(status_code=404, detail="No saved analysis found.")
+    @app.exception_handler(ChatValidationError)
+    async def handle_chat_validation_error(_: Request, exc: ChatValidationError):
+        return _safe_error(400, "chat_validation_error", str(exc))
 
+    @app.get("/api/v1/analyses/latest", response_model=AnalysisResponse)
+    async def get_latest_analysis(request: Request):
+        user_id = _require_authenticated_user(app, request)
         try:
-            analysis_id = supabase_store.get_latest_analysis_id()
+            analysis_id = _resolve_latest_analysis_id(app, user_id)
         except Exception as exc:
             raise HTTPException(status_code=404, detail="No saved analysis found.") from exc
 
-        analysis = _load_analysis_record(app, analysis_id)
+        analysis = _load_analysis_record(app, analysis_id, user_id=user_id)
         return _analysis_record_payload(analysis_id, analysis)
 
     # GET endpoint added by teammate 2 (frontend needs this)
     @app.get("/api/v1/analyses/{analysis_id}", response_model=AnalysisResponse)
-    async def get_analysis(analysis_id: str):
-        analysis = _load_analysis_record(app, analysis_id)
+    async def get_analysis(analysis_id: str, request: Request):
+        user_id = _require_authenticated_user(app, request)
+        analysis = _load_analysis_record(app, analysis_id, user_id=user_id)
         return _analysis_record_payload(analysis_id, analysis)
 
     @app.post("/api/v1/analyses", response_model=AnalysisResponse)
-    async def create_analysis(file: UploadFile = File(...)):
+    async def create_analysis(request: Request, file: UploadFile = File(...)):
+        user_id = _require_authenticated_user(app, request)
         raw = await file.read()
-        validated_rows, summary = validate_inventory_csv(raw)
+        validated_rows, _summary = validate_inventory_csv(raw)
         persistence_result = _persist_observations(
             app.state.supabase_store,
             validated_rows,
             source_type="import",
             file_name=file.filename,
             file_type="csv",
+            uploaded_by=user_id,
+            created_by=user_id,
         )
-        normalized_items = normalize_item_history(validated_rows, preserve_item_ids=True)
-        normalized_items = _attach_supabase_record_links(normalized_items, persistence_result)
-        dataset_summary = asdict(summary)
-        dataset_summary["item_count"] = len(normalized_items)
+        source_observations = validated_rows
+        latest_records_by_history_identity = persistence_result.get("latest_records_by_history_identity") or {}
+        if (
+            app.state.supabase_store is not None
+            and not persistence_result.get("_timed_out")
+            and hasattr(app.state.supabase_store, "list_user_observations")
+        ):
+            try:
+                source_observations = app.state.supabase_store.list_user_observations(user_id)
+                latest_records_by_history_identity = _latest_records_by_history_identity_from_observations(
+                    source_observations
+                )
+            except Exception as exc:
+                print(f"Failed to load user observation history from Supabase: {type(exc).__name__}: {exc}")
+
+        normalized_items = normalize_item_history(source_observations, preserve_item_ids=True)
+        normalized_items = _attach_supabase_record_links(
+            normalized_items,
+            {"latest_records_by_history_identity": latest_records_by_history_identity},
+        )
+        dataset_summary = {
+            "row_count": len(source_observations),
+            "item_count": len(normalized_items),
+            "date_range": _date_range_from_observations(source_observations),
+        }
         supabase_store_for_snapshot = None if persistence_result.get("_timed_out") else app.state.supabase_store
         analysis_id = _save_analysis(
             app.state.store,
@@ -380,23 +611,45 @@ def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | N
             supabase_store=supabase_store_for_snapshot,
             source_type="import",
             import_batch_id=persistence_result.get("import_batch_id"),
+            owner_id=user_id,
         )
-        return _analysis_payload(app.state.store, analysis_id)
+        return _analysis_payload(app.state.store, analysis_id, owner_id=user_id)
 
     @app.post("/api/v1/manual-analyses", response_model=AnalysisResponse)
-    async def create_manual_analysis(request: ManualAnalysisRequest):
-        raw_items = [item.model_dump() for item in request.items]
+    async def create_manual_analysis(request: Request, payload: ManualAnalysisRequest):
+        user_id = _require_authenticated_user(app, request)
+        raw_items = [item.model_dump() for item in payload.items]
         persistence_result = _persist_observations(
             app.state.supabase_store,
             raw_items,
             source_type="manual",
+            uploaded_by=user_id,
+            created_by=user_id,
         )
-        normalized_items = normalize_item_history(raw_items, preserve_item_ids=True)
-        normalized_items = _attach_supabase_record_links(normalized_items, persistence_result)
+        source_observations = raw_items
+        latest_records_by_history_identity = persistence_result.get("latest_records_by_history_identity") or {}
+        if (
+            app.state.supabase_store is not None
+            and not persistence_result.get("_timed_out")
+            and hasattr(app.state.supabase_store, "list_user_observations")
+        ):
+            try:
+                source_observations = app.state.supabase_store.list_user_observations(user_id)
+                latest_records_by_history_identity = _latest_records_by_history_identity_from_observations(
+                    source_observations
+                )
+            except Exception as exc:
+                print(f"Failed to load user observation history from Supabase: {type(exc).__name__}: {exc}")
+
+        normalized_items = normalize_item_history(source_observations, preserve_item_ids=True)
+        normalized_items = _attach_supabase_record_links(
+            normalized_items,
+            {"latest_records_by_history_identity": latest_records_by_history_identity},
+        )
         dataset_summary = {
-            "row_count": len(raw_items),
+            "row_count": len(source_observations),
             "item_count": len(normalized_items),
-            "date_range": _date_range_from_manual_items(raw_items),
+            "date_range": _date_range_from_observations(source_observations),
         }
         supabase_store_for_snapshot = None if persistence_result.get("_timed_out") else app.state.supabase_store
         analysis_id = _save_analysis(
@@ -406,37 +659,41 @@ def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | N
             supabase_store=supabase_store_for_snapshot,
             source_type="manual",
             import_batch_id=persistence_result.get("import_batch_id"),
+            owner_id=user_id,
         )
-        return _analysis_payload(app.state.store, analysis_id)
+        return _analysis_payload(app.state.store, analysis_id, owner_id=user_id)
 
     @app.get("/api/v1/analyses/{analysis_id}/records", response_model=RecordsResponse)
-    async def get_records(analysis_id: str):
-        analysis = _load_analysis_record(app, analysis_id)
+    async def get_records(analysis_id: str, request: Request):
+        user_id = _require_authenticated_user(app, request)
+        analysis = _load_analysis_record(app, analysis_id, user_id=user_id)
         return _records_payload_from_record(analysis_id, analysis)
 
     @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/simulate", response_model=SimulationResponse)
-    async def simulate_item(analysis_id: str, item_id: int, request: SimulationRequest):
-        item = _load_analysis_item(app, analysis_id, item_id)
-        simulated = simulate_item_quantity(item, request.simulated_order_qty)
+    async def simulate_item(analysis_id: str, item_id: int, request: Request, payload: SimulationRequest):
+        user_id = _require_authenticated_user(app, request)
+        item = _load_analysis_item(app, analysis_id, item_id, user_id=user_id)
+        simulated = simulate_item_quantity(item, payload.simulated_order_qty)
         return simulated
 
     @app.patch(
         "/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordItem
     )
     async def update_record(
-        analysis_id: str, item_id: str, request: RecordUpdateRequest
+        analysis_id: str, item_id: str, request: Request, payload: RecordUpdateRequest
     ):
+        user_id = _require_authenticated_user(app, request)
         try:
             # Convert item_id to int for store lookup
-            record = app.state.store.get(analysis_id)
-            existing_item = app.state.store.get_item(analysis_id, int(item_id))
+            record = app.state.store.get(analysis_id, owner_id=user_id)
+            existing_item = app.state.store.get_item(analysis_id, int(item_id), owner_id=user_id)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         editable = item_to_record_view(existing_item)
         editable["date"] = existing_item["date"]
         editable["item_id"] = existing_item["item_id"]
-        patch = request.model_dump(exclude_none=True)
+        patch = payload.model_dump(exclude_none=True)
         editable.update(patch)
         normalized_item = normalize_manual_items([editable], preserve_item_ids=True)[0]
         normalized_item["_observation_count"] = int(
@@ -452,21 +709,22 @@ def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | N
         }
         _save_analysis(
             app.state.store,
-            app.state.supabase_store,
             updated_items,
             dataset_summary,
             analysis_id=analysis_id,
+            owner_id=user_id,
         )
-        updated_item = app.state.store.get_item(analysis_id, int(item_id))
+        updated_item = app.state.store.get_item(analysis_id, int(item_id), owner_id=user_id)
         return item_to_record_view(updated_item)
 
     @app.delete(
         "/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordsResponse
     )
-    async def delete_record(analysis_id: str, item_id: str):
+    async def delete_record(analysis_id: str, item_id: str, request: Request):
+        user_id = _require_authenticated_user(app, request)
         try:
             # Convert item_id to int for store lookup
-            record = app.state.store.get(analysis_id)
+            record = app.state.store.get(analysis_id, owner_id=user_id)
             item_id_int = int(item_id)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -496,33 +754,28 @@ def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | N
         }
         _save_analysis(
             app.state.store,
-            app.state.supabase_store,
             remaining_items,
             dataset_summary,
             analysis_id=analysis_id,
+            owner_id=user_id,
         )
-        return _records_payload(app.state.store, analysis_id)
+        return _records_payload(app.state.store, analysis_id, owner_id=user_id)
 
     @app.post(
         "/api/v1/analyses/{analysis_id}/items/{item_id}/explanation",
         response_model=ExplanationResponse,
     )
-    async def explain_item(analysis_id: str, item_id: str, request: ExplanationRequest):
+    async def explain_item(analysis_id: str, item_id: str, request: Request, payload: ExplanationRequest):
+        user_id = _require_authenticated_user(app, request)
         try:
-            # Convert item_id to int for store lookup
             item_id_int = int(item_id)
-            # Try to get from Supabase store first, fall back to in-memory store
-            item = app.state.supabase_store.get_item(analysis_id, item_id_int)
-        except (KeyError, NotImplementedError, ValueError):
-            try:
-                item_id_int = int(item_id)
-                item = app.state.store.get_item(analysis_id, item_id_int)
-            except (KeyError, ValueError) as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            item = _load_analysis_item(app, analysis_id, item_id_int, user_id=user_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         simulation_context = None
-        if request.simulated_order_qty is not None:
-            simulation = simulate_item_quantity(item, request.simulated_order_qty)
+        if payload.simulated_order_qty is not None:
+            simulation = simulate_item_quantity(item, payload.simulated_order_qty)
             simulation_context = {
                 "simulated_order_qty": simulation["simulated_order_qty"],
                 "simulated_cash_outlay": simulation["simulated_cash_outlay"],
@@ -537,16 +790,73 @@ def create_app(glm_provider=None, supabase_store=None, enable_supabase: bool | N
             raw = provider.generate_explanation(context)
             parsed = parse_explanation_response(raw, context)
             return {"source": provider.source, **parsed}
-        except ExplanationValidationError:
+        except ExplanationValidationError as exc:
+            print(f"Explanation parse failed on first attempt: {type(exc).__name__}: {exc}")
             try:
                 strict_context = {**context, "_strict_json": True}
                 raw = provider.generate_explanation(strict_context)
                 parsed = parse_explanation_response(raw, context)
                 return {"source": provider.source, **parsed}
-            except Exception:
+            except Exception as retry_exc:
+                print(f"Explanation retry failed, using fallback: {type(retry_exc).__name__}: {retry_exc}")
                 return build_fallback_explanation(context)
-        except Exception:
+        except Exception as exc:
+            print(f"Explanation provider failed, using fallback: {type(exc).__name__}: {exc}")
             return build_fallback_explanation(context)
+
+    @app.post("/api/v1/analyses/{analysis_id}/ai-chat", response_model=ChatResponse)
+    async def ai_chat(analysis_id: str, request: Request, payload: ChatRequest):
+        user_id = _require_authenticated_user(app, request)
+        analysis = _load_analysis_record(app, analysis_id, user_id=user_id)
+        normalized_message = _normalize_chat_message(payload.message)
+        related_items = _build_related_chat_items(analysis.items, normalized_message)
+
+        simulation_context = None
+        if payload.simulation_context is not None:
+            item = _load_analysis_item(
+                app,
+                analysis_id,
+                payload.simulation_context.item_id,
+                user_id=user_id,
+            )
+            simulation_context = _build_simulation_chat_context(
+                item,
+                payload.simulation_context.simulated_order_qty,
+            )
+            related_items = _build_related_chat_items([item], normalized_message) or related_items
+
+        context = build_inventory_chat_context(
+            message=normalized_message,
+            recent_messages=[message.model_dump() for message in payload.recent_messages],
+            dataset_summary=analysis.dataset_summary,
+            kpi_summary=analysis.kpi_summary,
+            items=analysis.items,
+            simulation_context=simulation_context,
+        )
+        context["related_items"] = related_items
+        context["off_topic"] = not _is_supported_inventory_chat_message(normalized_message)
+        provider = app.state.glm_provider
+
+        if context["off_topic"]:
+            return build_fallback_chat_response(context)
+
+        try:
+            raw = provider.generate_inventory_chat(context)
+            parsed = parse_chat_response(raw, context)
+            return {"source": provider.source, **parsed}
+        except ChatValidationError as exc:
+            print(f"AI chat parse failed on first attempt: {type(exc).__name__}: {exc}")
+            try:
+                strict_context = {**context, "_strict_json": True}
+                raw = provider.generate_inventory_chat(strict_context)
+                parsed = parse_chat_response(raw, context)
+                return {"source": provider.source, **parsed}
+            except Exception as retry_exc:
+                print(f"AI chat retry failed, using fallback: {type(retry_exc).__name__}: {retry_exc}")
+                return build_fallback_chat_response(context)
+        except Exception as exc:
+            print(f"AI chat provider failed, using fallback: {type(exc).__name__}: {exc}")
+            return build_fallback_chat_response(context)
 
     @app.exception_handler(HTTPException)
     async def handle_http_exception(_: Request, exc: HTTPException):
