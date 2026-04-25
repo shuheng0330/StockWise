@@ -1,0 +1,8 @@
+fastapi>=0.136.0
+httpx>=0.28.1
+pandas>=2.3.0
+pydantic>=2.13.1
+python-multipart>=0.0.26
+uvicorn>=0.44.0
+supabase>=2.3.0
+python-dotenv>=1.0.0

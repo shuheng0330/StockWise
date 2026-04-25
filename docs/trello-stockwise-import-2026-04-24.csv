@@ -1,0 +1,42 @@
+Name,Description,List,Labels,Due Date
+Timeline - 16 Apr Kickoff and scope lock,Confirm team roles and lock MVP boundaries and judging criteria,Timeline Plan,Docs;High Risk,2026-04-16
+Timeline - 17 Apr Data contract and CSV validation,Finalize required input fields and validation errors for upload and manual paths,Timeline Plan,Backend;Testing,2026-04-17
+Timeline - 18 Apr Core analysis and ranking,Implement deterministic metrics and recommendation ranking outputs,Timeline Plan,Backend,2026-04-18
+Timeline - 19 Apr Dashboard and core frontend pages,Complete dashboard rendering and key page wiring for analysis outputs,Timeline Plan,Frontend,2026-04-19
+Timeline - 20 Apr AI explanation and decision brief,Integrate AI explanation and decision brief with fallback safety,Timeline Plan,AI;Backend,2026-04-20
+Timeline - 21 Apr Persistence and ownership,Complete Supabase persistence and user ownership behavior,Timeline Plan,Backend;High Risk,2026-04-21
+Timeline - 22 Apr API and service test coverage,Expand API and service tests for key flows and fallback scenarios,Timeline Plan,Testing;Backend,2026-04-22
+Timeline - 23 Apr Stability pass and bug fixes,Resolve functional regressions and improve reliability before final sprint,Timeline Plan,Testing;High Risk,2026-04-23
+Timeline - 24 Apr Testing analysis and evidence pack,Finalize testing analysis writeup and capture supporting evidence,Timeline Plan,Docs;Testing,2026-04-24
+Timeline - 25 Apr Demo and submission rehearsal,Lock demo script and run complete rehearsal with final build,Timeline Plan,Docs;Frontend;High Risk,2026-04-25
+Timeline - 26 Apr Final submission and buffer,Run final smoke checks and submit all required artifacts,Timeline Plan,Docs;High Risk,2026-04-26
+Kickoff completed and MVP scope locked,Scope and timeline confirmed for the competition window,Done,Docs,2026-04-16
+Data schema and validation rules completed,CSV and manual input validation behavior confirmed,Done,Backend;Testing,2026-04-17
+Analysis ranking engine completed,Recommendation logic and KPI outputs implemented and verified,Done,Backend,2026-04-18
+Dashboard implementation baseline completed,Core dashboard and navigation surfaces implemented,Done,Frontend,2026-04-19
+AI explanation and brief flow completed,AI explanation and decision brief paths implemented with fallback behavior,Done,AI;Backend,2026-04-20
+Supabase ownership and snapshot work completed,Persistence and access-scoped retrieval behaviors implemented,Done,Backend,2026-04-21
+Backend and frontend tests executed,Latest baseline captured and documented for judging evidence,Done,Testing,2026-04-22
+Stability fixes and reliability pass completed,Addressed key regressions and prepared for final documentation,Done,Testing,2026-04-23
+Testing analysis documentation completed,Final testing analysis document and docx export produced,Done,Docs;Testing,2026-04-24
+Create final demo script,Write exact presenter flow with timing and transitions,Ready This Week,Docs;High Risk,2026-04-25
+Prepare final slide deck,Finalize pitch deck with problem solution evidence and impact,Ready This Week,Docs,2026-04-25
+Record demo video,Record stable end to end walkthrough with voiceover,Ready This Week,Frontend;High Risk,2026-04-25
+Final UI polish pass,Fix visual rough edges and ensure mobile and desktop readiness,Ready This Week,Frontend,2026-04-25
+Update README for judging setup,Include run steps and environment variables for quick evaluation,Ready This Week,Docs,2026-04-25
+Submission form draft completion,Pre-fill every submission field before final day,Ready This Week,Docs;High Risk,2026-04-25
+Fix GLM stream empty-content test mismatch,Align expected behavior with provider retry policy or adjust implementation,In Progress,Testing;Backend;High Risk,2026-04-25
+Consolidate final artifact links,Collect all docs video and repository links into one submission note,In Progress,Docs,2026-04-25
+Full backend test run with GLM_MODE=mock,Execute deterministic full suite and capture final numbers,Review and Testing,Testing;Backend,2026-04-26
+Frontend test and production build run,Run Jest and production build and record outcomes,Review and Testing,Testing;Frontend,2026-04-26
+Manual end to end smoke test,Upload CSV verify dashboard simulation AI brief and fallback path,Review and Testing,Testing;High Risk,2026-04-26
+Migration and env verification,Confirm required migration and environment values in final deployment notes,Review and Testing,Backend;Docs,2026-04-26
+No active blockers placeholder,Move this card to Done if no blockers remain by end of day,Blocked,High Risk,2026-04-25
+Final README check,Confirm instructions and repository links are correct,Submission Pack,Docs,2026-04-26
+Architecture document final check,Confirm architecture writeup reflects final implementation,Submission Pack,Docs,2026-04-26
+Testing analysis document final check,Confirm metrics and findings are consistent with latest run,Submission Pack,Docs;Testing,2026-04-26
+Demo script final version,Lock presenter script and backup script,Submission Pack,Docs,2026-04-26
+Demo video final version,Upload final cut and verify playback quality,Submission Pack,Docs;Frontend;High Risk,2026-04-26
+Slides final version,Lock final slide deck and export backup PDF,Submission Pack,Docs,2026-04-26
+Final smoke checklist signed off,All critical checks passed before submission,Submission Pack,Testing;High Risk,2026-04-26
+Submission completed and confirmed,Submit and save proof screenshot plus confirmation details,Submission Pack,Docs;High Risk,2026-04-26

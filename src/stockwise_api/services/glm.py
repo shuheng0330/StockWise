@@ -14,6 +14,10 @@ EXPLANATION_FIELDS = (
 CHAT_FIELDS = (
     "scope, answer, supporting_points, related_items, suggested_follow_ups, warning_flag"
 )
+CHAT_NARRATIVE_FIELDS = (
+    "answer, supporting_points, suggested_follow_ups, warning_flag"
+)
+CHAT_NARRATIVE_TOKENS = 900
 DECISION_BRIEF_FIELDS = (
     "summary, buy_today, buy_less, delay, estimated_impact, top_tradeoffs, "
     "recommended_order, confidence_note, warning_flag"
@@ -35,10 +39,8 @@ CHAT_SYSTEM_PROMPT = (
     "Answer only from the provided analysis and optional simulation context. "
     "If the user asks for anything outside the current inventory analysis, respond with a brief refusal that redirects them back to inventory questions. "
     "Do not invent sales, revenue, profit, supplier, or outside market facts. "
-    f"Return one JSON object with exactly these fields: {CHAT_FIELDS}. "
-    "scope must be either analysis or simulation. "
-    "related_items must be a list of objects, and each object must contain item_id, item_name, recommended_action, and reason. "
-    "Each related_items item_id must come from the provided item list. "
+    f"Return one JSON object with exactly these fields: {CHAT_NARRATIVE_FIELDS}. "
+    "supporting_points and suggested_follow_ups must be lists with one to three strings. "
     "Keep the answer concise, operational, and owner-friendly. Do not add markdown or code fences."
 )
 DECISION_BRIEF_SYSTEM_PROMPT = (
@@ -219,29 +221,13 @@ def _compact_model_context(context: dict) -> dict:
 
 
 def _compact_chat_context(context: dict) -> dict:
+    related_items = _chat_related_items(context) if "analysis" in context else []
     compact = {
         "scope": context["scope"],
         "message": context["message"],
         "recent_messages": context.get("recent_messages", []),
-        "dataset_summary": context["analysis"]["dataset_summary"],
         "kpi_summary": context["analysis"]["kpi_summary"],
-        "items": [
-            {
-                "item_id": item["item_id"],
-                "item_name": item["item_name"],
-                "category": item.get("category"),
-                "subcategory": item.get("subcategory"),
-                "current_stock": item["current_stock"],
-                "daily_usage": item["daily_usage"],
-                "days_of_cover": item["days_of_cover"],
-                "estimated_waste_cost": item["estimated_waste_cost"],
-                "reorder_urgency_score": item["reorder_urgency_score"],
-                "waste_risk_score": item["waste_risk_score"],
-                "recommended_action": item["recommended_action"],
-                "reason_hint": item.get("reason_hint"),
-            }
-            for item in context["analysis"]["items"]
-        ],
+        "related_items": related_items,
     }
     if context.get("simulation"):
         compact["simulation"] = context["simulation"]
@@ -393,6 +379,68 @@ def _narrative_text_list(value, fallback: list[str]) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return fallback
+
+
+def _chat_related_items(context: dict) -> list[dict]:
+    related_items = context.get("related_items") or []
+    if not related_items:
+        related_items = [
+            {
+                "item_id": item["item_id"],
+                "item_name": item["item_name"],
+                "recommended_action": item["recommended_action"],
+                "reason": item.get("reason_hint") or "This item is relevant to the current question.",
+            }
+            for item in context.get("analysis", {}).get("items", [])[:3]
+        ]
+    return [
+        {
+            "item_id": int(item["item_id"]),
+            "item_name": item["item_name"],
+            "recommended_action": item["recommended_action"],
+            "reason": item.get("reason") or item.get("reason_hint") or "This item is relevant to the current question.",
+        }
+        for item in related_items[:3]
+    ]
+
+
+def _assemble_live_chat_response(context: dict, narrative: dict) -> str:
+    related_items = _chat_related_items(context)
+    starter_follow_ups = [
+        "What's the biggest risk in today's plan?",
+        "Which items can I delay to save cash?",
+        "Why is dairy risky this week?",
+    ]
+    kpi_summary = context.get("analysis", {}).get("kpi_summary", {})
+    fallback_points = []
+    if kpi_summary:
+        fallback_points.extend(
+            [
+                f"{kpi_summary.get('restock_now_count', 0)} item(s) need immediate restocking.",
+                f"{kpi_summary.get('buy_less_count', 0)} item(s) are flagged to buy less.",
+            ]
+        )
+    fallback_points.extend(item["reason"] for item in related_items[:2])
+    if not fallback_points:
+        fallback_points = ["This answer is grounded in the current StockWise analysis."]
+    response = {
+        "scope": context["scope"],
+        "answer": _narrative_text(
+            narrative.get("answer"),
+            "Focus on urgent restocks first, buy less for high waste-risk items, and delay items with enough cover.",
+        ),
+        "supporting_points": _narrative_text_list(
+            narrative.get("supporting_points"),
+            fallback_points[:3],
+        )[:3],
+        "related_items": related_items,
+        "suggested_follow_ups": _narrative_text_list(
+            narrative.get("suggested_follow_ups"),
+            starter_follow_ups,
+        )[:3],
+        "warning_flag": narrative.get("warning_flag"),
+    }
+    return json.dumps(response)
 
 
 def _assemble_live_decision_brief(context: dict, narrative: dict) -> str:
@@ -656,7 +704,13 @@ class LiveZAIProvider(BaseZAIProvider):
 
     def generate_inventory_chat(self, context: dict) -> str:
         model_context = _compact_chat_context(context)
-        return self._generate_json_response(CHAT_SYSTEM_PROMPT, model_context)
+        raw = self._generate_json_response(
+            CHAT_SYSTEM_PROMPT,
+            model_context,
+            max_tokens=CHAT_NARRATIVE_TOKENS,
+        )
+        narrative = _loads_model_json(raw)
+        return _assemble_live_chat_response(context, narrative)
 
     def generate_decision_brief(self, context: dict) -> str:
         model_context = _compact_decision_brief_context(context)
