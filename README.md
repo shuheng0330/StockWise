@@ -61,7 +61,7 @@ StockWise/
 │  ├─ src/pages                  # /, /login, /signup, /dashboard/[id], /records/[id],
 │  │                             # /simulation/[id]/[itemId], /explanation/[id]/[itemId],
 │  │                             # /export/[id], /history, /settings
-│  ├─ src/components             # Dashboard nav, AICopilotPanel, AIDecisionBriefCard,
+│  ├─ src/components             # Dashboard nav, AIAdvisorPanel, AIDecisionBriefCard,
 │  │                             # InventoryItemForm, ItemSimulation, ExplanationDrawer, common
 │  └─ src/lib                    # auth, analysisSession, navigationTargets, supabase, ...
 ├─ supabase/migrations/          # SQL migrations for analysis snapshots and item ownership
@@ -250,7 +250,7 @@ npm test            # jest unit tests
 1. **Daily Overview** — open the Decision Dashboard for stock health, KPI cards, and the AI Decision Brief.
 2. **Action Board** — sort by Date / Urgency / Waste Risk and follow `RESTOCK_NOW`, `BUY_LESS`, `DELAY_PURCHASE` recommendations.
 3. **Test a Reorder** — click **Simulate** on any row to compare aggressive vs conservative quantities.
-4. **Ask the Copilot** — open the AI Copilot panel for grounded follow-ups; hand off a simulation result to ask "what changed?"
+4. **Ask the Advisor** — open the AI Advisor panel for grounded follow-ups; hand off a simulation result to ask "what changed?"
 5. **Review Records** — fix any data issues at `/records/{id}`; recommendations refresh automatically.
 6. **Export / History** — download CSV/JSON or print to PDF from `/export/{id}`; revisit past entries at `/history`.
 
