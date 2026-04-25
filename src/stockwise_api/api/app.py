@@ -378,6 +378,23 @@ def _supabase_enabled(enable_supabase: bool | None) -> bool:
     return bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
 
 
+def _cors_origins_from_env() -> list[str]:
+    defaults = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+    ]
+    configured = [
+        origin.strip().rstrip("/")
+        for origin in os.getenv("STOCKWISE_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    return [*defaults, *configured]
+
+
 def _env_float(name: str, default: float) -> float:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -576,15 +593,7 @@ def create_app(
     # Add CORS middleware (from shun branch - required for frontend)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "http://localhost:3002",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:3001",
-            "http://127.0.0.1:3002",
-        ],
-        # allow_origins=["http://localhost:3000"],
+        allow_origins=_cors_origins_from_env(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

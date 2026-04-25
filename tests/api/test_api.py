@@ -47,6 +47,22 @@ def test_upload_endpoint_returns_analysis_and_ranked_items():
     assert any(item["recommended_action"] == "BUY_LESS" for item in body["items"])
 
 
+def test_cors_allows_deployed_frontend_origin_from_env(monkeypatch):
+    monkeypatch.setenv("STOCKWISE_CORS_ORIGINS", "https://stockwise.vercel.app")
+    client = TestClient(create_app())
+
+    response = client.options(
+        "/api/v1/analyses",
+        headers={
+            "Origin": "https://stockwise.vercel.app",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://stockwise.vercel.app"
+
+
 def test_upload_endpoint_accepts_legacy_dataset_csv_headers():
     client = TestClient(create_app())
     response = client.post(

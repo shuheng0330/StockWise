@@ -297,6 +297,87 @@ def test_live_provider_uses_compact_decision_brief_narrative(monkeypatch):
     assert parsed["estimated_impact"]["cash"] == "Cash impact."
 
 
+def test_live_provider_assembles_chat_response_from_compact_narrative(monkeypatch):
+    observed = {}
+    narrative_payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "answer": "Restock milk first and reduce paneer purchases.",
+                            "supporting_points": ["Milk has urgent shortage risk."],
+                            "suggested_follow_ups": ["Which items can I delay?"],
+                            "warning_flag": None,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+
+    class RequestCapturingClient(FakeClient):
+        def __init__(self, *, timeout):
+            super().__init__(timeout=timeout)
+            observed["client"] = self
+
+        def post(self, url, *, json, headers):
+            self.requests.append({"method": "POST", "url": url, "json": json, "headers": headers})
+            return FakeResponse(narrative_payload)
+
+    monkeypatch.setattr(httpx, "Client", lambda *, timeout: RequestCapturingClient(timeout=timeout))
+    provider = LiveZAIProvider(
+        api_key="test-key",
+        base_url="https://api.ilmu.ai/v1/chat/completions",
+        model="ilmu-glm-5.1",
+    )
+
+    content = provider.generate_inventory_chat(
+        {
+            "scope": "analysis",
+            "message": "What should I buy today?",
+            "recent_messages": [],
+            "analysis": {
+                "dataset_summary": {"total_items": 2},
+                "kpi_summary": {"restock_now_count": 1, "buy_less_count": 1},
+                "items": [
+                    {
+                        "item_id": 1,
+                        "item_name": "Milk",
+                        "category": "Dairy",
+                        "subcategory": "Fresh",
+                        "current_stock": 2,
+                        "daily_usage": 5,
+                        "days_of_cover": 0.4,
+                        "estimated_waste_cost": 0,
+                        "reorder_urgency_score": 95,
+                        "waste_risk_score": 10,
+                        "recommended_action": "RESTOCK_NOW",
+                        "reason_hint": "Urgent restock needed.",
+                    }
+                ],
+            },
+            "related_items": [
+                {
+                    "item_id": 1,
+                    "item_name": "Milk",
+                    "recommended_action": "RESTOCK_NOW",
+                    "reason": "Urgent restock needed.",
+                }
+            ],
+        }
+    )
+    parsed = json.loads(content)
+
+    assert observed["client"].requests[0]["json"]["thinking"] == {"type": "disabled"}
+    assert observed["client"].requests[0]["json"]["max_tokens"] == 900
+    assert "related_items" not in observed["client"].requests[0]["json"]["messages"][0]["content"]
+    assert parsed["answer"] == "Restock milk first and reduce paneer purchases."
+    assert parsed["scope"] == "analysis"
+    assert parsed["related_items"][0]["item_name"] == "Milk"
+
+
 def test_live_provider_prefers_split_read_timeout_over_legacy_total_timeout(monkeypatch):
     observed = {}
 
@@ -338,6 +419,10 @@ def test_live_provider_raises_when_stream_has_no_visible_content(monkeypatch):
                     "data: [DONE]",
                 ]
             )
+
+        def post(self, url, *, json, headers):
+            self.requests.append({"method": "POST", "url": url, "json": json, "headers": headers})
+            return FakeResponse({"choices": [{"message": {"content": ""}, "finish_reason": "length"}]})
 
     monkeypatch.setattr(httpx, "Client", lambda *, timeout: EmptyStreamClient(timeout=timeout))
     provider = LiveZAIProvider(

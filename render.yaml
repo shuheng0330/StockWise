@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: stockwise-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: PYTHONPATH=src python -m uvicorn --factory stockwise_api.api.app:create_app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: STOCKWISE_CORS_ORIGINS
+        sync: false
+      - key: STOCKWISE_SUPABASE_ENABLED
+        value: "true"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GLM_MODE
+        value: mock
+      - key: ZAI_API_KEY
+        sync: false
