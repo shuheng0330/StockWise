@@ -738,23 +738,52 @@ class LiveZAIProvider(BaseZAIProvider):
 
     def generate_inventory_chat(self, context: dict) -> str:
         model_context = _compact_chat_context(context)
-        raw = self._generate_json_response(
-            _system_prompt(CHAT_SYSTEM_PROMPT, context, STRICT_CHAT_PROMPT_SUFFIX),
-            model_context,
+        narrative = self._generate_narrative_json(
+            context=context,
+            model_context=model_context,
+            base_prompt=CHAT_SYSTEM_PROMPT,
+            strict_suffix=STRICT_CHAT_PROMPT_SUFFIX,
             max_tokens=CHAT_NARRATIVE_TOKENS,
         )
-        narrative = _loads_model_json(raw)
         return _assemble_live_chat_response(context, narrative)
 
     def generate_decision_brief(self, context: dict) -> str:
         model_context = _compact_decision_brief_context(context)
-        raw = self._generate_json_response(
-            _system_prompt(DECISION_BRIEF_SYSTEM_PROMPT, context, STRICT_DECISION_BRIEF_PROMPT_SUFFIX),
-            model_context,
+        narrative = self._generate_narrative_json(
+            context=context,
+            model_context=model_context,
+            base_prompt=DECISION_BRIEF_SYSTEM_PROMPT,
+            strict_suffix=STRICT_DECISION_BRIEF_PROMPT_SUFFIX,
             max_tokens=DECISION_BRIEF_NARRATIVE_TOKENS,
         )
-        narrative = _loads_model_json(raw)
         return _assemble_live_decision_brief(context, narrative)
+
+    def _generate_narrative_json(
+        self,
+        *,
+        context: dict,
+        model_context: dict,
+        base_prompt: str,
+        strict_suffix: str,
+        max_tokens: int,
+    ) -> dict:
+        raw = self._generate_json_response(
+            _system_prompt(base_prompt, context, strict_suffix),
+            model_context,
+            max_tokens=max_tokens,
+        )
+        try:
+            return _loads_model_json(raw)
+        except Exception:
+            if context.get("_strict_json"):
+                raise
+            retry_context = {**context, "_strict_json": True}
+            retry_raw = self._generate_json_response(
+                _system_prompt(base_prompt, retry_context, strict_suffix),
+                model_context,
+                max_tokens=max_tokens,
+            )
+            return _loads_model_json(retry_raw)
 
     def _generate_json_response(self, system_prompt: str, model_context: dict, max_tokens: int | None = None) -> str:
         payload = {
