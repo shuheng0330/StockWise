@@ -156,6 +156,53 @@ def test_live_provider_defaults_to_non_streaming_for_ilmu_endpoint(monkeypatch):
     assert fake_client.requests[0]["json"]["stream"] is False
 
 
+def test_live_provider_uses_gemini_compatible_payload(monkeypatch):
+    fake_client = FakeClient(timeout=20.0)
+    monkeypatch.setattr(httpx, "Client", lambda *, timeout: fake_client)
+    provider = LiveZAIProvider(
+        api_key="test-key",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        model="gemini-2.5-flash",
+    )
+
+    provider.generate_explanation(
+        {
+            "item_name": "Paneer",
+            "recommended_action": "BUY_LESS",
+            "waste_risk_score": 100,
+        }
+    )
+
+    request_payload = fake_client.requests[0]["json"]
+    assert request_payload["stream"] is False
+    assert request_payload["reasoning_effort"] == "low"
+    assert "thinking" not in request_payload
+    assert "response_format" not in request_payload
+
+
+def test_live_provider_uses_stricter_explanation_prompt_when_requested(monkeypatch):
+    fake_client = FakeClient(timeout=20.0)
+    monkeypatch.setattr(httpx, "Client", lambda *, timeout: fake_client)
+    provider = LiveZAIProvider(
+        api_key="test-key",
+        base_url="https://api.ilmu.ai/v1/chat/completions",
+        model="ilmu-glm-5.1",
+    )
+
+    provider.generate_explanation(
+        {
+            "item_name": "Paneer",
+            "recommended_action": "BUY_LESS",
+            "waste_risk_score": 100,
+            "_strict_json": True,
+        }
+    )
+
+    system_prompt = fake_client.requests[0]["json"]["messages"][0]["content"]
+    assert "Do not use the words sales, revenue, or profit" in system_prompt
+    assert "Keep every text field under 220 characters" in system_prompt
+
+
 def test_live_provider_uses_configurable_timeout(monkeypatch):
     observed = {}
 
