@@ -1,5 +1,5 @@
 # StockWise 📦
-**AI Decision Copilot for Inventory Reordering and Waste Reduction**
+**AI-Powered Decision System for Inventory Reordering and Waste Reduction**
 
 StockWise is a web-based decision intelligence system for small cafes and kiosks. It converts structured inventory records into ranked actions, simulation-based trade-off analysis, and AI-powered explanations that help non-technical operators decide what to **restock now**, what to **buy less of**, and what to **delay**.
 
