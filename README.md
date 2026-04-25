@@ -272,3 +272,10 @@ npm test            # jest unit tests
 1. Create a branch off `main`.
 2. Run `pytest` and `npm test` before opening a PR.
 3. Keep validation, metric computation, recommendation logic, simulation, and AI integration in their existing modules — that separation is part of the maintainability requirements in the PRD.
+
+## 📞 Contact
+
+For any inquiries regarding this project, please contact:
+
+**Lim Wey Cheng**  
+Email: **weychenglim@gmail.com**
