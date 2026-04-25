@@ -1,9 +1,24 @@
 # StockWise 📦
 **AI Decision Copilot for Inventory Reordering and Waste Reduction**
 
-StockWise is a web-based decision intelligence system for small cafes and kiosks. It converts structured inventory records into ranked actions, simulation-based trade-off analysis, and Z.AI GLM-powered explanations that help non-technical operators decide what to **restock now**, what to **buy less of**, and what to **delay**.
+StockWise is a web-based decision intelligence system for small cafes and kiosks. It converts structured inventory records into ranked actions, simulation-based trade-off analysis, and AI-powered explanations that help non-technical operators decide what to **restock now**, what to **buy less of**, and what to **delay**.
 
 The MVP is grounded in a 100-day, 1,000-record sample dataset across 10 recurring inventory items, so it demonstrates practical decision support without claiming advanced forecasting or revenue prediction.
+
+---
+
+## 🎥 Pitching Video & Submission Information
+
+> **Recorded Pitching Video:** [Watch the StockWise pitching video on Google Drive](https://drive.google.com/file/d/1-BgemkpK5SXC1fVDnv8UXx0Kvsagtpxh/view)
+
+> **Deployed Website:** [https://stock-wise-one.vercel.app/](https://stock-wise-one.vercel.app/)
+
+### Submission Notes
+
+- The documentation prepared for submission is located in the **`Docs_For_Submission`** folder.
+- The deployed website currently still uses the **Z.AI API key**, so some AI responses may appear as the fallback version if the live Z.AI output is unavailable or limited.
+- Our local stack has been migrated to use the **Gemini API key**.
+- The login credentials for accessing the application are provided in the **last slide of the pitch deck**.
 
 ---
 
@@ -29,7 +44,7 @@ The MVP is grounded in a 100-day, 1,000-record sample dataset across 10 recurrin
 - **Backend**: Python 3.11+, FastAPI, Pydantic v2, pandas, httpx, Supabase Python client.
 - **Frontend**: Next.js 14 (Pages Router), React 18, TypeScript, TailwindCSS, Axios, Supabase JS, Recharts, Lucide.
 - **Persistence**: Supabase (Postgres + Auth). In-memory store as a fast cache, with snapshot fallback.
-- **AI**: Z.AI GLM (`glm-4.5` by default) via `https://api.z.ai/api/paas/v4/chat/completions`. Mock provider available for demos without an API key.
+- **AI**: Local stack uses Gemini API; deployed Vercel build currently uses Z.AI GLM and may fall back to deterministic output if live AI is unavailable. Mock provider available for demos without an API key.
 
 ---
 
