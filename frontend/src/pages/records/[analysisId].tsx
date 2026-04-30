@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/router';
-import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
-import { Button, Card, Alert, Input, Select } from '@/components/common';
+import { Alert, Button, Card, Input } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
-import { apiClient } from '@/services/api';
 import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
-import { InventoryItem, ManualItemInput, PerishabilityLevel, UsagePeriod, RecommendedAction } from '@/types';
+import { apiClient } from '@/services/api';
+import { InventoryItem, ManualItemInput, RecommendedAction } from '@/types';
+import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 
 type SortKey = 'date' | 'reorder_urgency_score' | 'waste_risk_score';
@@ -207,8 +207,6 @@ export default function RecordsPage() {
             <span className="text-gray-600 font-medium">Sort by:</span>
             {([
               { key: 'date', label: 'Date' },
-              { key: 'reorder_urgency_score', label: 'Urgency' },
-              { key: 'waste_risk_score', label: 'Waste Risk' },
             ] as { key: SortKey; label: string }[]).map(({ key, label }) => (
               <button
                 key={key}
@@ -254,7 +252,7 @@ export default function RecordsPage() {
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Unit</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Action</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Daily Usage</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Recommendation</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900 min-w-[160px]">Recommendation</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Operations</th>
                 </tr>
               </thead>
@@ -317,7 +315,7 @@ export default function RecordsPage() {
                         <td className="px-6 py-4 text-sm text-gray-900">{item.recommended_action.replace('_', ' ')}</td>
                         <td className="px-6 py-4 text-sm text-gray-900">{item.daily_usage.toFixed(2)}</td>
                         <td className="px-6 py-4">
-                          <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
+                          <span className={`inline-block whitespace-nowrap px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
                             {item.recommended_action.replace('_', ' ')}
                           </span>
                         </td>

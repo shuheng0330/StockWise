@@ -68,6 +68,35 @@ class AnalysisResponse(BaseModel):
     items: list[ItemAnalysis]
 
 
+class DecisionBriefItem(BaseModel):
+    item_id: int
+    item_name: str
+    recommended_action: Literal[
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    ]
+    reason: str
+
+
+class DecisionBriefImpact(BaseModel):
+    cash: str
+    waste: str
+    shortage: str
+
+
+class DecisionBriefResponse(BaseModel):
+    source: Literal["live", "mock", "fallback"]
+    summary: str
+    buy_today: list[DecisionBriefItem]
+    buy_less: list[DecisionBriefItem]
+    delay: list[DecisionBriefItem]
+    estimated_impact: DecisionBriefImpact
+    top_tradeoffs: list[str]
+    recommended_order: list[str]
+    confidence_note: str
+    warning_flag: str | None = None
+    safety_status: Literal["validated", "retried", "fallback_used"]
+
+
 class ManualItemInput(CanonicalItemInput):
     pass
 
@@ -107,6 +136,7 @@ class RecordsResponse(BaseModel):
 
 
 class RecordUpdateRequest(BaseModel):
+    date: str | None = None
     item_name: str | None = None
     current_stock: float | None = Field(default=None, ge=0)
     unit: str | None = None

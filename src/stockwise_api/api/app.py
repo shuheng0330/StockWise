@@ -1,11 +1,12 @@
 from dataclasses import is_dataclass
 from datetime import date
+import json
 from typing import Callable
 import os
 from queue import Empty, Queue
 from threading import Thread
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from supabase import Client, ClientOptions, create_client
@@ -15,6 +16,7 @@ from stockwise_api.schemas import (
     AnalysisResponse,
     ChatRequest,
     ChatResponse,
+    DecisionBriefResponse,
     ErrorEnvelope,
     ExplanationRequest,
     ExplanationResponse,
@@ -26,6 +28,7 @@ from stockwise_api.schemas import (
     RecordsResponse,
 )
 from stockwise_api.services.glm import (
+    build_decision_brief_context,
     build_explanation_context,
     build_inventory_chat_context,
     provider_from_env,
@@ -38,10 +41,13 @@ from stockwise_api.services.manual_input import (
 )
 from stockwise_api.services.parsing import (
     ChatValidationError,
+    DecisionBriefValidationError,
+    build_fallback_decision_brief,
     build_fallback_chat_response,
     ExplanationValidationError,
     build_fallback_explanation,
     parse_chat_response,
+    parse_decision_brief_response,
     parse_explanation_response,
 )
 from stockwise_api.services.recommendations import (
@@ -58,6 +64,67 @@ from stockwise_api.store import InMemoryAnalysisStore, SupabaseAnalysisStore
 
 def _strip_internal_fields(payload: dict) -> dict:
     return {key: value for key, value in payload.items() if not key.startswith("_")}
+
+
+def _stable_json(value) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _ai_cache_owner_key(analysis_id: str, owner_id: str | None) -> str:
+    return f"{owner_id or 'anonymous'}:{analysis_id}"
+
+
+def _ai_chat_cache_key(
+    *,
+    analysis_id: str,
+    owner_id: str | None,
+    message: str,
+    recent_messages: list[dict],
+    simulation_context: dict | None,
+) -> str:
+    return _stable_json(
+        {
+            "owner": owner_id or "anonymous",
+            "analysis_id": analysis_id,
+            "message": message,
+            "recent_messages": recent_messages,
+            "simulation_context": simulation_context,
+        }
+    )
+
+
+def _ai_explanation_cache_key(
+    *,
+    analysis_id: str,
+    owner_id: str | None,
+    item_id: int,
+    explanation_request: dict,
+) -> str:
+    return _stable_json(
+        {
+            "owner": owner_id or "anonymous",
+            "analysis_id": analysis_id,
+            "item_id": item_id,
+            "request": explanation_request,
+        }
+    )
+
+
+def _clear_ai_cache_for_analysis(app: FastAPI, analysis_id: str, owner_id: str | None = None) -> None:
+    cache = getattr(app.state, "ai_response_cache", None)
+    if not cache:
+        return
+    owner_prefix = f"{owner_id or 'anonymous'}:{analysis_id}"
+    cache.get("decision_briefs", {}).pop(owner_prefix, None)
+    for bucket_name in ("chats", "explanations"):
+        bucket = cache.get(bucket_name, {})
+        for key in list(bucket.keys()):
+            try:
+                parsed = json.loads(key)
+            except json.JSONDecodeError:
+                continue
+            if parsed.get("analysis_id") == analysis_id and parsed.get("owner") == (owner_id or "anonymous"):
+                bucket.pop(key, None)
 
 
 def _safe_error(
@@ -311,6 +378,23 @@ def _supabase_enabled(enable_supabase: bool | None) -> bool:
     return bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
 
 
+def _cors_origins_from_env() -> list[str]:
+    defaults = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+    ]
+    configured = [
+        origin.strip().rstrip("/")
+        for origin in os.getenv("STOCKWISE_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    return [*defaults, *configured]
+
+
 def _env_float(name: str, default: float) -> float:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -509,13 +593,7 @@ def create_app(
     # Add CORS middleware (from shun branch - required for frontend)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:3001",
-        ],
-        # allow_origins=["http://localhost:3000"],
+        allow_origins=_cors_origins_from_env(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -525,6 +603,7 @@ def create_app(
     app.state.supabase_store = supabase_store if supabase_store is not None else _build_supabase_store(enable_supabase)
     app.state.glm_provider = glm_provider or provider_from_env()
     app.state.auth_user_resolver = auth_user_resolver or _build_supabase_auth_resolver(enable_supabase)
+    app.state.ai_response_cache = {"decision_briefs": {}, "chats": {}, "explanations": {}}
 
     @app.exception_handler(ValidationError)
     async def handle_validation_error(_: Request, exc: ValidationError):
@@ -545,6 +624,10 @@ def create_app(
     @app.exception_handler(ChatValidationError)
     async def handle_chat_validation_error(_: Request, exc: ChatValidationError):
         return _safe_error(400, "chat_validation_error", str(exc))
+
+    @app.exception_handler(DecisionBriefValidationError)
+    async def handle_decision_brief_validation_error(_: Request, exc: DecisionBriefValidationError):
+        return _safe_error(400, "decision_brief_validation_error", str(exc))
 
     @app.get("/api/v1/analyses/latest", response_model=AnalysisResponse)
     async def get_latest_analysis(request: Request):
@@ -714,6 +797,7 @@ def create_app(
             analysis_id=analysis_id,
             owner_id=user_id,
         )
+        _clear_ai_cache_for_analysis(app, analysis_id, owner_id=user_id)
         updated_item = app.state.store.get_item(analysis_id, int(item_id), owner_id=user_id)
         return item_to_record_view(updated_item)
 
@@ -759,19 +843,37 @@ def create_app(
             analysis_id=analysis_id,
             owner_id=user_id,
         )
+        _clear_ai_cache_for_analysis(app, analysis_id, owner_id=user_id)
         return _records_payload(app.state.store, analysis_id, owner_id=user_id)
 
     @app.post(
         "/api/v1/analyses/{analysis_id}/items/{item_id}/explanation",
         response_model=ExplanationResponse,
     )
-    async def explain_item(analysis_id: str, item_id: str, request: Request, payload: ExplanationRequest):
+    async def explain_item(
+        analysis_id: str,
+        item_id: str,
+        request: Request,
+        payload: ExplanationRequest,
+        refresh: bool = Query(False),
+    ):
         user_id = _require_authenticated_user(app, request)
         try:
             item_id_int = int(item_id)
             item = _load_analysis_item(app, analysis_id, item_id_int, user_id=user_id)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        explanation_request = payload.model_dump(exclude_none=True)
+        cache_key = _ai_explanation_cache_key(
+            analysis_id=analysis_id,
+            owner_id=user_id,
+            item_id=item_id_int,
+            explanation_request=explanation_request,
+        )
+        explanation_cache = app.state.ai_response_cache["explanations"]
+        if not refresh and cache_key in explanation_cache:
+            return explanation_cache[cache_key]
 
         simulation_context = None
         if payload.simulated_order_qty is not None:
@@ -789,26 +891,52 @@ def create_app(
         try:
             raw = provider.generate_explanation(context)
             parsed = parse_explanation_response(raw, context)
-            return {"source": provider.source, **parsed}
+            response = {"source": provider.source, **parsed}
+            explanation_cache[cache_key] = response
+            return response
         except ExplanationValidationError as exc:
             print(f"Explanation parse failed on first attempt: {type(exc).__name__}: {exc}")
             try:
                 strict_context = {**context, "_strict_json": True}
                 raw = provider.generate_explanation(strict_context)
                 parsed = parse_explanation_response(raw, context)
-                return {"source": provider.source, **parsed}
+                response = {"source": provider.source, **parsed}
+                explanation_cache[cache_key] = response
+                return response
             except Exception as retry_exc:
                 print(f"Explanation retry failed, using fallback: {type(retry_exc).__name__}: {retry_exc}")
-                return build_fallback_explanation(context)
+                response = build_fallback_explanation(context)
+                explanation_cache[cache_key] = response
+                return response
         except Exception as exc:
             print(f"Explanation provider failed, using fallback: {type(exc).__name__}: {exc}")
-            return build_fallback_explanation(context)
+            response = build_fallback_explanation(context)
+            explanation_cache[cache_key] = response
+            return response
 
     @app.post("/api/v1/analyses/{analysis_id}/ai-chat", response_model=ChatResponse)
-    async def ai_chat(analysis_id: str, request: Request, payload: ChatRequest):
+    async def ai_chat(
+        analysis_id: str,
+        request: Request,
+        payload: ChatRequest,
+        refresh: bool = Query(False),
+    ):
         user_id = _require_authenticated_user(app, request)
         analysis = _load_analysis_record(app, analysis_id, user_id=user_id)
         normalized_message = _normalize_chat_message(payload.message)
+        recent_messages = [message.model_dump() for message in payload.recent_messages]
+        simulation_payload = payload.simulation_context.model_dump() if payload.simulation_context else None
+        cache_key = _ai_chat_cache_key(
+            analysis_id=analysis_id,
+            owner_id=user_id,
+            message=normalized_message,
+            recent_messages=recent_messages,
+            simulation_context=simulation_payload,
+        )
+        chat_cache = app.state.ai_response_cache["chats"]
+        if not refresh and cache_key in chat_cache:
+            return chat_cache[cache_key]
+
         related_items = _build_related_chat_items(analysis.items, normalized_message)
 
         simulation_context = None
@@ -827,7 +955,7 @@ def create_app(
 
         context = build_inventory_chat_context(
             message=normalized_message,
-            recent_messages=[message.model_dump() for message in payload.recent_messages],
+            recent_messages=recent_messages,
             dataset_summary=analysis.dataset_summary,
             kpi_summary=analysis.kpi_summary,
             items=analysis.items,
@@ -838,25 +966,84 @@ def create_app(
         provider = app.state.glm_provider
 
         if context["off_topic"]:
-            return build_fallback_chat_response(context)
+            response = build_fallback_chat_response(context)
+            chat_cache[cache_key] = response
+            return response
 
         try:
             raw = provider.generate_inventory_chat(context)
             parsed = parse_chat_response(raw, context)
-            return {"source": provider.source, **parsed}
+            response = {"source": provider.source, **parsed}
+            chat_cache[cache_key] = response
+            return response
         except ChatValidationError as exc:
             print(f"AI chat parse failed on first attempt: {type(exc).__name__}: {exc}")
             try:
                 strict_context = {**context, "_strict_json": True}
                 raw = provider.generate_inventory_chat(strict_context)
                 parsed = parse_chat_response(raw, context)
-                return {"source": provider.source, **parsed}
+                response = {"source": provider.source, **parsed}
+                chat_cache[cache_key] = response
+                return response
             except Exception as retry_exc:
                 print(f"AI chat retry failed, using fallback: {type(retry_exc).__name__}: {retry_exc}")
-                return build_fallback_chat_response(context)
+                response = build_fallback_chat_response(context)
+                chat_cache[cache_key] = response
+                return response
         except Exception as exc:
             print(f"AI chat provider failed, using fallback: {type(exc).__name__}: {exc}")
-            return build_fallback_chat_response(context)
+            response = build_fallback_chat_response(context)
+            chat_cache[cache_key] = response
+            return response
+
+    @app.get("/api/v1/analyses/{analysis_id}/decision-brief", response_model=DecisionBriefResponse)
+    async def decision_brief(
+        analysis_id: str,
+        request: Request,
+        refresh: bool = Query(False),
+    ):
+        user_id = _require_authenticated_user(app, request)
+        analysis = _load_analysis_record(app, analysis_id, user_id=user_id)
+        cache_key = _ai_cache_owner_key(analysis_id, user_id)
+        decision_cache = app.state.ai_response_cache["decision_briefs"]
+        if not refresh and cache_key in decision_cache:
+            return decision_cache[cache_key]
+
+        context = build_decision_brief_context(
+            dataset_summary=analysis.dataset_summary,
+            kpi_summary=analysis.kpi_summary,
+            items=analysis.items,
+        )
+        provider = app.state.glm_provider
+
+        try:
+            raw = provider.generate_decision_brief(context)
+            parsed = parse_decision_brief_response(raw, context)
+            response = {"source": provider.source, **parsed}
+            decision_cache[cache_key] = response
+            return response
+        except DecisionBriefValidationError as exc:
+            print(f"Decision brief parse failed on first attempt: {type(exc).__name__}: {exc}")
+            try:
+                strict_context = {**context, "_strict_json": True}
+                raw = provider.generate_decision_brief(strict_context)
+                parsed = parse_decision_brief_response(raw, context, safety_status="retried")
+                response = {"source": provider.source, **parsed}
+                decision_cache[cache_key] = response
+                return response
+            except Exception as retry_exc:
+                print(
+                    "Decision brief retry failed, using fallback: "
+                    f"{type(retry_exc).__name__}: {retry_exc}"
+                )
+                response = build_fallback_decision_brief(context)
+                decision_cache[cache_key] = response
+                return response
+        except Exception as exc:
+            print(f"Decision brief provider failed, using fallback: {type(exc).__name__}: {exc}")
+            response = build_fallback_decision_brief(context)
+            decision_cache[cache_key] = response
+            return response
 
     @app.exception_handler(HTTPException)
     async def handle_http_exception(_: Request, exc: HTTPException):

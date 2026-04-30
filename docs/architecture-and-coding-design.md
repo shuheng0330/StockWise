@@ -27,6 +27,7 @@
 - Record delete endpoint removes one item and returns the remaining record set.
 - Simulation endpoint returns scenario metrics and updated action.
 - Explanation endpoint returns `live`, `mock`, or `fallback` explanation payload.
+- Decision brief endpoint returns `live`, `mock`, or `fallback` dashboard-level action plan payload.
 - AI chat endpoint returns `live`, `mock`, or `fallback` chat cards scoped to the current analysis or a simulation handoff.
 
 ## Canonical Input Flow
@@ -135,7 +136,9 @@
 - Only structured item context is sent to the provider.
 - Context includes item identity, current metrics, derived metrics, recent context, and optional simulation context.
 - Live provider requests use `response_format = {"type": "json_object"}`, `thinking = {"type": "disabled"}`, and a bounded output token budget so GLM responses land in `message.content` as parseable JSON.
-- AI copilot chat uses the same live provider path but a separate inventory-copilot prompt and a compact analysis summary instead of the explanation-only item contract.
+- Live provider streaming is controlled by `ZAI_STREAM=true|false`. The ILMU endpoint defaults to non-streaming because its streamed chunks may contain no visible `content`, while non-streaming returns the JSON payload through the normal chat-completions message body.
+- AI decision brief uses a dashboard-level prompt with dataset summary, KPI summary, top ranked items, and deterministic impact notes. It returns `summary`, `buy_today`, `buy_less`, `delay`, `estimated_impact`, `top_tradeoffs`, `recommended_order`, `confidence_note`, and `warning_flag`.
+- AI Advisor chat uses the same live provider path but a separate inventory-Advisor prompt and a compact analysis summary instead of the explanation-only item contract.
 
 ## Parser and Fallback Flow
 - Parse JSON
@@ -143,7 +146,9 @@
 - Check item match and unsupported claims
 - Retry once on malformed response
 - Fall back to deterministic template if still invalid
-- AI copilot chat follows the same pattern with its own schema validation for `scope`, `supporting_points`, `related_items`, and `suggested_follow_ups`.
+- Decision brief validation also rejects unknown item IDs, mismatched item names/actions, unsupported revenue/profit/sales claims, and overlong text before returning content to the frontend.
+- Decision brief fallback returns `source = fallback` and `safety_status = fallback_used`, with a user-visible warning to review records before ordering.
+- AI Advisor chat follows the same pattern with its own schema validation for `scope`, `supporting_points`, `related_items`, and `suggested_follow_ups`.
 
 ## Runtime Notes
 - App factory: `stockwise_api.api.app:create_app`
@@ -152,6 +157,8 @@
 - Live provider fails fast at startup if `GLM_MODE=live` and `ZAI_API_KEY` is missing
 - The current live configuration uses the ILMU OpenAI-compatible chat-completions endpoint with `ZAI_BASE_URL=https://api.ilmu.ai/v1/chat/completions` and `ZAI_MODEL=ilmu-glm-5.1`.
 - `POST /api/v1/analyses/{analysis_id}/ai-chat` loads the authenticated user's current analysis snapshot, trims ranked items into a compact prompt context, and optionally adds one server-computed simulation comparison when `simulation_context` is provided.
+- `GET /api/v1/analyses/{analysis_id}/decision-brief` loads the current analysis snapshot and generates a dashboard-level GLM brief without blocking analysis creation or dashboard rendering.
+- The frontend should fetch the decision brief in parallel after loading the dashboard route; KPI cards, filters, Advisor, and the item table remain visible while the brief is pending or falls back.
 - Off-topic AI chat requests are refused deterministically instead of being forwarded to the model.
 - CSV uploads preserve source `item_id` values when present and collapse repeated historical observations into one latest item per source item.
 - Manual analysis requests can include repeated dated entries for the same owner-facing item; those entries collapse into one latest item with trend-aware metrics.
@@ -167,3 +174,4 @@
 - `ZAI_API_KEY`
 - `ZAI_BASE_URL`
 - `ZAI_MODEL`
+- `ZAI_STREAM=true|false`

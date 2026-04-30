@@ -1,20 +1,25 @@
-import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/router';
-import { Search, Filter, TrendingUp, AlertCircle, DollarSign, Percent, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
-import { Button, Card, Input, Alert } from '@/components/common';
-import { AICopilotPanel } from '@/components/AICopilotPanel';
+import { AIAdvisorPanel } from '@/components/AIAdvisorPanel';
+import { AIDecisionBriefCard } from '@/components/AIDecisionBriefCard';
+import { Alert, Button, Card, Input } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
-import { apiClient } from '@/services/api';
 import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
-import { AnalysisResponse, InventoryItem, RecommendedAction } from '@/types';
+import { apiClient } from '@/services/api';
+import { AnalysisResponse, DecisionBriefResponse, RecommendedAction } from '@/types';
+import { AlertCircle, ArrowDown, ArrowUp, ArrowUpDown, DollarSign, Percent, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
 export default function Dashboard() {
   const router = useRouter();
   const { analysisId, chatItemId, simulated, chatPrompt } = router.query;
+  const analysisIdValue = Array.isArray(analysisId) ? analysisId[0] : analysisId;
 
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
+  const [decisionBrief, setDecisionBrief] = useState<DecisionBriefResponse | null>(null);
+  const [isBriefLoading, setIsBriefLoading] = useState(false);
+  const [briefError, setBriefError] = useState('');
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<RecommendedAction | 'ALL'>('ALL');
   const [isLoading, setIsLoading] = useState(true);
@@ -52,17 +57,34 @@ export default function Dashboard() {
       : undefined;
 
   useEffect(() => {
-    if (!analysisId) return;
+    if (!analysisIdValue) return;
 
-    fetchAnalysis();
-  }, [analysisId]);
+    setAnalysis(null);
+    setDecisionBrief(null);
+    setBriefError('');
+    setIsBriefLoading(true);
+    fetchAnalysis(analysisIdValue);
+  }, [analysisIdValue]);
 
-  const fetchAnalysis = async () => {
+  useEffect(() => {
+    if (!analysisIdValue || !analysis || analysis.analysis_id !== analysisIdValue) return;
+
+    // Start the AI brief request only after deterministic analysis content is ready.
+    const timeoutId = window.setTimeout(() => {
+      fetchDecisionBrief(analysisIdValue);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [analysisIdValue, analysis]);
+
+  const fetchAnalysis = async (targetAnalysisId: string) => {
     setIsLoading(true);
     setError('');
 
     try {
-      const response = await apiClient.getAnalysis(analysisId as string);
+      const response = await apiClient.getAnalysis(targetAnalysisId);
       setAnalysis(response);
       saveLatestAnalysisId(response.analysis_id);
     } catch (err: any) {
@@ -70,7 +92,7 @@ export default function Dashboard() {
         clearLatestAnalysisId();
         try {
           const latest = await apiClient.getLatestAnalysis();
-          if (latest.analysis_id && latest.analysis_id !== analysisId) {
+          if (latest.analysis_id && latest.analysis_id !== targetAnalysisId) {
             saveLatestAnalysisId(latest.analysis_id);
             await router.replace(`/dashboard/${latest.analysis_id}`);
             return;
@@ -85,6 +107,21 @@ export default function Dashboard() {
       toast.error(message);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchDecisionBrief = async (targetAnalysisId: string, refresh = false) => {
+    setIsBriefLoading(true);
+    setBriefError('');
+
+    try {
+      const response = await apiClient.getDecisionBrief(targetAnalysisId, { refresh });
+      setDecisionBrief(response);
+    } catch (err: any) {
+      const message = err.response?.data?.message || err.message || 'Unable to generate AI Decision Brief right now.';
+      setBriefError(message);
+    } finally {
+      setIsBriefLoading(false);
     }
   };
 
@@ -254,17 +291,13 @@ export default function Dashboard() {
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
         <div className="mb-6">
-          <AICopilotPanel
-            analysisId={analysisId as string}
-            initialPrompt={typeof initialChatPrompt === 'string' ? initialChatPrompt : undefined}
-            initialSimulationContext={
-              initialSimulationContext &&
-                Number.isFinite(initialSimulationContext.item_id) &&
-                Number.isFinite(initialSimulationContext.simulated_order_qty)
-                ? initialSimulationContext
-                : undefined
-            }
-            onSendMessage={(request) => apiClient.getAiChat(analysisId as string, request)}
+          <AIDecisionBriefCard
+            analysisId={analysisIdValue as string}
+            isLoading={isBriefLoading}
+            brief={decisionBrief}
+            error={briefError}
+            onRetry={() => analysisIdValue && fetchDecisionBrief(analysisIdValue, true)}
+            isRetrying={isBriefLoading}
           />
         </div>
 
@@ -405,6 +438,19 @@ export default function Dashboard() {
           </Card>
         )}
       </div>
+
+      <AIAdvisorPanel
+        analysisId={analysisIdValue as string}
+        initialPrompt={typeof initialChatPrompt === 'string' ? initialChatPrompt : undefined}
+        initialSimulationContext={
+          initialSimulationContext &&
+            Number.isFinite(initialSimulationContext.item_id) &&
+            Number.isFinite(initialSimulationContext.simulated_order_qty)
+            ? initialSimulationContext
+            : undefined
+        }
+        onSendMessage={(request, options) => apiClient.getAiChat(analysisIdValue as string, request, options)}
+      />
     </div>
   );
 }

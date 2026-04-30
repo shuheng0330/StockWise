@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/router';
-import { Button, Card, Alert } from '@/components/common';
+import { Alert, Button } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { ExplanationDrawer } from '@/components/ExplanationDrawer';
 import { apiClient } from '@/services/api';
 import { ExplanationResponse } from '@/types';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
 export default function ExplanationPage() {
@@ -14,16 +14,20 @@ export default function ExplanationPage() {
 
   const [explanation, setExplanation] = useState<ExplanationResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [error, setError] = useState<string>('');
-  const [showDrawer, setShowDrawer] = useState(true);
 
   useEffect(() => {
     if (!analysisId || !itemId) return;
     fetchExplanation();
   }, [analysisId, itemId, simulated]);
 
-  const fetchExplanation = async () => {
-    setIsLoading(true);
+  const fetchExplanation = async (refresh = false) => {
+    if (refresh) {
+      setIsRetrying(true);
+    } else {
+      setIsLoading(true);
+    }
     setError('');
 
     try {
@@ -31,7 +35,8 @@ export default function ExplanationPage() {
       const result = await apiClient.getExplanation(
         analysisId as string,
         itemId as string,
-        request
+        request,
+        { refresh }
       );
       setExplanation(result);
       toast.success('Explanation loaded');
@@ -40,7 +45,11 @@ export default function ExplanationPage() {
       setError(message);
       toast.error(message);
     } finally {
-      setIsLoading(false);
+      if (refresh) {
+        setIsRetrying(false);
+      } else {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -80,20 +89,20 @@ export default function ExplanationPage() {
         activeSection="explanation"
       />
 
-      {showDrawer && (
-        <ExplanationDrawer
-          explanation={explanation}
-          onClose={() => setShowDrawer(false)}
-        />
-      )}
-
-      {!showDrawer && (
-        <div className="max-w-4xl mx-auto px-4 md:px-8 py-8">
+      <div className="max-w-4xl mx-auto px-4 md:px-8 py-8">
+        <div className="mb-6">
           <Link href={`/dashboard/${analysisId}`}>
             <Button variant="secondary">Back to Dashboard</Button>
           </Link>
         </div>
-      )}
+        <ExplanationDrawer
+          explanation={explanation}
+          onClose={() => {}}
+          onRetry={() => fetchExplanation(true)}
+          isRetrying={isRetrying}
+          embedded
+        />
+      </div>
     </div>
   );
 }

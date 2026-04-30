@@ -1,7 +1,7 @@
 # StockWise Project Requirements
 
 ## Accepted MVP Scope
-- FastAPI backend for CSV ingestion, analysis, simulation, explanation, and AI copilot chat.
+- FastAPI backend for CSV ingestion, analysis, simulation, explanation, and AI Advisor chat.
 - Owner-friendly manual entry flow on the same frontend entry page as CSV upload.
 - Inventory records review/edit/delete flow for entered or uploaded items.
 - Stable API contracts for frontend integration.
@@ -25,6 +25,7 @@
 - `DELETE /api/v1/analyses/{analysis_id}/items/{item_id}`
 - `POST /api/v1/analyses/{analysis_id}/items/{item_id}/simulate`
 - `POST /api/v1/analyses/{analysis_id}/items/{item_id}/explanation`
+- `GET /api/v1/analyses/{analysis_id}/decision-brief`
 - `POST /api/v1/analyses/{analysis_id}/ai-chat`
 
 ## Canonical Input Contract
@@ -122,7 +123,7 @@
   - `suggested_next_step`
   - `confidence_note`
   - `warning_flag`
-- AI copilot chat returns:
+- AI Advisor chat returns:
   - `source`
   - `scope`
   - `answer`
@@ -130,6 +131,18 @@
   - `related_items[]` with `item_id`, `item_name`, `recommended_action`, and `reason`
   - `suggested_follow_ups[]`
   - `warning_flag`
+- AI decision brief returns:
+  - `source`
+  - `summary`
+  - `buy_today[]`
+  - `buy_less[]`
+  - `delay[]`
+  - `estimated_impact` with `cash`, `waste`, and `shortage`
+  - `top_tradeoffs[]`
+  - `recommended_order[]`
+  - `confidence_note`
+  - `warning_flag`
+  - `safety_status`
 - Records endpoint returns:
   - `analysis_id`
   - `dataset_summary`
@@ -141,8 +154,23 @@
 ## Current GLM Mode
 - Local development can use `mock`.
 - The current configured live provider uses `GLM_MODE=live`, `ZAI_BASE_URL=https://api.ilmu.ai/v1/chat/completions`, and `ZAI_MODEL=ilmu-glm-5.1`.
+- The ILMU live provider defaults to non-streaming responses because its streaming chunks may be empty even when the non-streaming chat completion returns usable JSON.
 - Live explanation generation has been verified through the production request path; invalid or unavailable model output still falls back to deterministic explanations.
-- The same provider path now also supports AI copilot chat with a structured JSON response and deterministic fallback.
+- The same provider path now also supports AI decision briefs and AI Advisor chat with structured JSON responses and deterministic fallback.
+
+## GLM Centrality and Decision Brief
+- Deterministic scoring produces grounded evidence: metrics, risks, action labels, and impact estimates.
+- Z.AI GLM is the decision intelligence layer that turns this evidence into an owner-ready operating plan.
+- The dashboard loads deterministic analysis first, then fetches the AI Decision Brief asynchronously so GLM latency or failure does not block KPI cards, filters, AI Advisor, or the item table.
+- The AI Decision Brief explains what to buy today, what to buy less, what can be delayed, estimated cash/waste/shortage impact, top trade-offs, and recommended order of action.
+- If the GLM component is removed, StockWise can still show raw scores and rule labels, but it loses dashboard-level contextual reasoning, cross-item strategy, and owner-friendly decision synthesis.
+
+## Fallback and Failure Behavior
+- GLM outputs for explanations, AI Advisor chat, and AI decision briefs are parsed as JSON and validated before being returned to the user.
+- Hallucinated or unusable decision brief responses are rejected when they contain invalid JSON, missing fields, unknown item IDs, mismatched item names/actions, unsupported revenue/profit/sales claims, or overlong text.
+- The backend retries once with stricter JSON-only context after a validation failure.
+- If the retry fails or the provider is unavailable, the backend returns a deterministic fallback brief with `source = fallback` and `safety_status = fallback_used`.
+- The frontend keeps deterministic analysis visible and shows a visible safety state with a Review Records path so the owner can inspect or correct source data before ordering.
 
 ## User-Visible Success Criteria
 - Upload the provided inventory CSV and receive ranked actions and KPI summaries.
@@ -156,5 +184,6 @@
 - Simulate reorder quantity changes for a chosen item.
 - Receive a safe explanation payload even when model output is invalid.
 - Keep deterministic rankings visible when explanation generation fails.
-- Ask the AI copilot grounded questions about the current analysis, including what to buy today, which items to delay, and why a category looks risky.
-- From the simulation flow, hand off a simulated result back into the dashboard AI copilot and ask what changed after the scenario.
+- Ask the AI Advisor grounded questions about the current analysis, including what to buy today, which items to delay, and why a category looks risky.
+- See an AI Decision Brief load independently after the dashboard appears, including safe fallback status when model output is unavailable or rejected.
+- From the simulation flow, hand off a simulated result back into the dashboard AI Advisor and ask what changed after the scenario.

@@ -26,6 +26,17 @@ CHAT_REQUIRED_FIELDS = {
     "suggested_follow_ups",
     "warning_flag",
 }
+DECISION_BRIEF_REQUIRED_FIELDS = {
+    "summary",
+    "buy_today",
+    "buy_less",
+    "delay",
+    "estimated_impact",
+    "top_tradeoffs",
+    "recommended_order",
+    "confidence_note",
+    "warning_flag",
+}
 CHAT_ACTION_ALIASES = {
     "DELAY_REORDER": "DELAY_PURCHASE",
     "DELAY_RESTOCK": "DELAY_PURCHASE",
@@ -38,6 +49,10 @@ class ExplanationValidationError(ValueError):
 
 
 class ChatValidationError(ValueError):
+    pass
+
+
+class DecisionBriefValidationError(ValueError):
     pass
 
 
@@ -193,6 +208,129 @@ def parse_chat_response(payload: str, context: dict) -> dict:
     return parsed
 
 
+def _validate_brief_text(value: object, field_name: str, max_length: int = 500) -> str:
+    text = "" if value is None else str(value)
+    if len(text) > max_length:
+        raise DecisionBriefValidationError(f"Decision brief field '{field_name}' exceeds allowed length.")
+    if UNSUPPORTED_PATTERN.search(text):
+        raise DecisionBriefValidationError("Decision brief contains unsupported revenue/profit/sales claims.")
+    return text
+
+
+def _validate_brief_text_list(values: object, field_name: str) -> list[str]:
+    if not isinstance(values, list) or not values:
+        raise DecisionBriefValidationError(f"Decision brief field '{field_name}' must contain at least one entry.")
+    return [_validate_brief_text(value, field_name) for value in values]
+
+
+def _fallback_brief_text_list(context: dict, field_name: str, parsed: dict) -> list[str]:
+    if field_name == "top_tradeoffs":
+        impact = context.get("deterministic_impact") or {}
+        return [
+            impact.get("shortage") or "Restocking urgent items reduces shortage risk but uses cash now.",
+            impact.get("waste") or "Buying less can reduce waste exposure but needs closer monitoring.",
+        ]
+    if field_name == "recommended_order":
+        items = [
+            *parsed.get("buy_today", []),
+            *parsed.get("buy_less", []),
+            *parsed.get("delay", []),
+        ]
+        order = [
+            f"{item['recommended_action'].replace('_', ' ').title()}: {item['item_name']}"
+            for item in items
+        ][:5]
+        return order or ["Review the ranked item table before placing orders."]
+    return ["Review the current StockWise recommendation before ordering."]
+
+
+def _validate_or_fill_brief_text_list(values: object, field_name: str, context: dict, parsed: dict) -> list[str]:
+    if isinstance(values, str) and values.strip():
+        values = [values]
+    elif not isinstance(values, list) or not values:
+        values = _fallback_brief_text_list(context, field_name, parsed)
+    return _validate_brief_text_list(values, field_name)
+
+
+def _validate_brief_items(values: object, context: dict, field_name: str) -> list[dict]:
+    if not isinstance(values, list):
+        raise DecisionBriefValidationError(f"Decision brief field '{field_name}' must be a list.")
+
+    allowed_item_ids = context.get("allowed_item_ids", set())
+    items_by_id = context.get("items_by_id", {})
+    normalized = []
+    for item in values:
+        if not isinstance(item, dict):
+            raise DecisionBriefValidationError(f"Decision brief field '{field_name}' entries must be objects.")
+        required_item_fields = {"item_id", "item_name", "recommended_action", "reason"}
+        missing_item_fields = required_item_fields - item.keys()
+        if missing_item_fields:
+            raise DecisionBriefValidationError(
+                f"Decision brief item is missing fields: {sorted(missing_item_fields)}"
+            )
+        item_id = int(item["item_id"])
+        if item_id not in allowed_item_ids:
+            raise DecisionBriefValidationError("Decision brief references an unknown item_id.")
+        expected = items_by_id.get(item_id, {})
+        if item["item_name"] != expected.get("item_name"):
+            raise DecisionBriefValidationError("Decision brief item_name does not match the current analysis.")
+        if item["recommended_action"] != expected.get("recommended_action"):
+            raise DecisionBriefValidationError(
+                "Decision brief recommended_action does not match the current analysis."
+            )
+        normalized.append(
+            {
+                "item_id": item_id,
+                "item_name": item["item_name"],
+                "recommended_action": item["recommended_action"],
+                "reason": _validate_brief_text(item["reason"], "reason", max_length=280),
+            }
+        )
+    return normalized
+
+
+def parse_decision_brief_response(payload: str, context: dict, safety_status: str = "validated") -> dict:
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise DecisionBriefValidationError("Decision brief response is not valid JSON.") from exc
+
+    missing = DECISION_BRIEF_REQUIRED_FIELDS - parsed.keys()
+    if missing:
+        raise DecisionBriefValidationError(f"Decision brief response is missing fields: {sorted(missing)}")
+
+    parsed["summary"] = _validate_brief_text(parsed["summary"], "summary")
+    parsed["buy_today"] = _validate_brief_items(parsed["buy_today"], context, "buy_today")
+    parsed["buy_less"] = _validate_brief_items(parsed["buy_less"], context, "buy_less")
+    parsed["delay"] = _validate_brief_items(parsed["delay"], context, "delay")
+
+    impact = parsed["estimated_impact"]
+    if not isinstance(impact, dict):
+        raise DecisionBriefValidationError("Decision brief estimated_impact must be an object.")
+    missing_impact = {"cash", "waste", "shortage"} - impact.keys()
+    if missing_impact:
+        raise DecisionBriefValidationError(f"Decision brief estimated_impact is missing fields: {sorted(missing_impact)}")
+    parsed["estimated_impact"] = {
+        "cash": _validate_brief_text(impact["cash"], "estimated_impact.cash"),
+        "waste": _validate_brief_text(impact["waste"], "estimated_impact.waste"),
+        "shortage": _validate_brief_text(impact["shortage"], "estimated_impact.shortage"),
+    }
+    parsed["top_tradeoffs"] = _validate_or_fill_brief_text_list(
+        parsed["top_tradeoffs"], "top_tradeoffs", context, parsed
+    )
+    parsed["recommended_order"] = _validate_or_fill_brief_text_list(
+        parsed["recommended_order"], "recommended_order", context, parsed
+    )
+    parsed["confidence_note"] = _validate_brief_text(parsed["confidence_note"], "confidence_note")
+    parsed["warning_flag"] = (
+        None
+        if parsed["warning_flag"] is None or parsed["warning_flag"] is False
+        else _validate_brief_text(parsed["warning_flag"], "warning_flag")
+    )
+    parsed["safety_status"] = safety_status
+    return parsed
+
+
 def build_fallback_explanation(context: dict) -> dict:
     priority = "HIGH" if context["reorder_urgency_score"] >= 70 else "MEDIUM" if context["waste_risk_score"] >= 70 else "LOW"
     action = context["recommended_action"]
@@ -241,7 +379,7 @@ def build_fallback_explanation(context: dict) -> dict:
 
 def build_fallback_chat_response(context: dict) -> dict:
     starter_follow_ups = [
-        "What should I buy today?",
+        "What's the biggest risk in today's plan?",
         "Which items can I delay to save cash?",
         "Why is dairy risky this week?",
     ]
@@ -284,7 +422,7 @@ def build_fallback_chat_response(context: dict) -> dict:
         follow_ups = [
             "Should I still order today?",
             "How does this affect waste risk?",
-            "What should I buy today?",
+            "What's the biggest risk in today's plan?",
         ]
         return {
             "source": "fallback",
@@ -327,4 +465,58 @@ def build_fallback_chat_response(context: dict) -> dict:
         "related_items": related_items,
         "suggested_follow_ups": starter_follow_ups,
         "warning_flag": warning_flag,
+    }
+
+
+def _fallback_brief_item(item: dict) -> dict:
+    return {
+        "item_id": int(item["item_id"]),
+        "item_name": item["item_name"],
+        "recommended_action": item["recommended_action"],
+        "reason": item.get("reason_hint") or (
+            "This item is selected from deterministic StockWise scores."
+        ),
+    }
+
+
+def build_fallback_decision_brief(context: dict) -> dict:
+    items = context.get("analysis", {}).get("items", [])
+    if not items:
+        items = [
+            {
+                "item_id": item_id,
+                "item_name": item["item_name"],
+                "recommended_action": item["recommended_action"],
+            }
+            for item_id, item in context.get("items_by_id", {}).items()
+        ]
+    buy_today = [_fallback_brief_item(item) for item in items if item["recommended_action"] == "RESTOCK_NOW"][:3]
+    buy_less = [_fallback_brief_item(item) for item in items if item["recommended_action"] == "BUY_LESS"][:3]
+    delay = [_fallback_brief_item(item) for item in items if item["recommended_action"] == "DELAY_PURCHASE"][:3]
+    impact = context.get("deterministic_impact") or {
+        "cash": "Use the ranked recommendations to preserve cash where purchases can wait.",
+        "waste": "Buy less for high waste-risk items to limit spoilage exposure.",
+        "shortage": "Restock urgent items first to reduce shortage risk.",
+    }
+    recommended_order = [
+        f"{item['recommended_action'].replace('_', ' ').title()}: {item['item_name']}"
+        for item in [*buy_today, *buy_less, *delay]
+    ][:5]
+    if not recommended_order:
+        recommended_order = ["Review the ranked item table before placing orders."]
+    return {
+        "source": "fallback",
+        "summary": "Use the deterministic StockWise ranking: restock urgent items first, buy less where waste risk is high, and delay items with enough cover.",
+        "buy_today": buy_today,
+        "buy_less": buy_less,
+        "delay": delay,
+        "estimated_impact": impact,
+        "top_tradeoffs": [
+            "Urgent restocks reduce shortage risk but use cash immediately.",
+            "Buying less lowers waste exposure but requires closer monitoring.",
+        ],
+        "recommended_order": recommended_order,
+        "confidence_note": "Fallback brief generated from deterministic StockWise rules after AI output was unavailable or failed validation.",
+        "warning_flag": "Review records before ordering; the AI brief used a safe fallback.",
+        "safety_status": "fallback_used",
     }
