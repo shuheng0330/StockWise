@@ -184,7 +184,7 @@ export default function ExportPage() {
               Download all {analysis.items.length} items with scores and recommended actions.
               Opens in Excel, Google Sheets, or any spreadsheet tool.
             </p>
-            <Button variant="primary" onClick={handleExportCsv} className="inline-flex items-center gap-2 justify-center">
+            <Button variant="primary" data-testid="export-csv-btn" onClick={handleExportCsv} className="inline-flex items-center gap-2 justify-center">
               <Download className="w-4 h-4" />
               Download CSV
             </Button>

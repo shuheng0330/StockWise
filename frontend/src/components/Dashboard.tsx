@@ -18,6 +18,7 @@ import {
     Menu,
     Settings,
     Upload,
+    Activity,
     X
 } from 'lucide-react';
 import Link from 'next/link';
@@ -255,6 +256,14 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 label="Settings"
                 href="/settings"
                 active={activeSection === 'settings'}
+                onClick={closeMobile}
+            />
+
+            <NavItem
+                icon={<Activity className="w-5 h-5" />}
+                label="Status"
+                href="/judge-mode"
+                active={activeSection === 'judge-mode'}
                 onClick={closeMobile}
             />
 

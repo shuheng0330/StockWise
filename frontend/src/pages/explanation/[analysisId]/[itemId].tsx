@@ -95,13 +95,15 @@ export default function ExplanationPage() {
             <Button variant="secondary">Back to Dashboard</Button>
           </Link>
         </div>
-        <ExplanationDrawer
-          explanation={explanation}
-          onClose={() => {}}
-          onRetry={() => fetchExplanation(true)}
-          isRetrying={isRetrying}
-          embedded
-        />
+        <div data-testid="explanation-content">
+          <ExplanationDrawer
+            explanation={explanation}
+            onClose={() => {}}
+            onRetry={() => fetchExplanation(true)}
+            isRetrying={isRetrying}
+            embedded
+          />
+        </div>
       </div>
     </div>
   );

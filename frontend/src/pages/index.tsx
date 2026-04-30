@@ -128,6 +128,7 @@ export default function EntryPage() {
               {/* CSV Upload Option */}
               <Card className="p-8 cursor-pointer hover:shadow-lg transition">
                 <button
+                  data-testid="csv-upload-card"
                   onClick={() => setMode('upload')}
                   className="w-full text-left"
                 >
@@ -222,12 +223,14 @@ export default function EntryPage() {
                   ref={fileInputRef}
                   type="file"
                   accept=".csv"
+                  data-testid="csv-file-input"
                   onChange={handleCsvUpload}
                   disabled={isLoading}
                   className="hidden"
                 />
                 <Button
                   variant="primary"
+                  data-testid="select-file-btn"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isLoading}
                   loading={isLoading}
