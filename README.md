@@ -1,9 +1,28 @@
 # StockWise 📦
-**AI Decision Copilot for Inventory Reordering and Waste Reduction**
+**AI-Powered Decision System for Inventory Reordering and Waste Reduction**
 
-StockWise is a web-based decision intelligence system for small cafes and kiosks. It converts structured inventory records into ranked actions, simulation-based trade-off analysis, and Z.AI GLM-powered explanations that help non-technical operators decide what to **restock now**, what to **buy less of**, and what to **delay**.
+[![CI](https://github.com/shuheng0330/StockWise/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shuheng0330/StockWise/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Next.js 14](https://img.shields.io/badge/next.js-14-black.svg)](https://nextjs.org/)
+
+StockWise is a web-based decision intelligence system for small cafes and kiosks. It converts structured inventory records into ranked actions, simulation-based trade-off analysis, and AI-powered explanations that help non-technical operators decide what to **restock now**, what to **buy less of**, and what to **delay**.
 
 The MVP is grounded in a 100-day, 1,000-record sample dataset across 10 recurring inventory items, so it demonstrates practical decision support without claiming advanced forecasting or revenue prediction.
+
+---
+
+## 🎥 Pitching Video & Submission Information
+
+> **Recorded Pitching Video:** [Watch the StockWise pitching video on Google Drive](https://drive.google.com/file/d/1-BgemkpK5SXC1fVDnv8UXx0Kvsagtpxh/view)
+
+> **Deployed Website:** [https://stock-wise-one.vercel.app/](https://stock-wise-one.vercel.app/)
+
+### Submission Notes
+
+- The documentation prepared for submission is located in the **`Docs_For_Submission`** folder.
+- The deployed website currently still uses the **Z.AI API key**, so some AI responses may appear as the fallback version if the live Z.AI output is unavailable or limited.
+- Our local stack has been migrated to use the **Gemini API key**.
+- The login credentials for accessing the application are provided in the **last slide of the pitch deck**.
 
 ---
 
@@ -29,7 +48,7 @@ The MVP is grounded in a 100-day, 1,000-record sample dataset across 10 recurrin
 - **Backend**: Python 3.11+, FastAPI, Pydantic v2, pandas, httpx, Supabase Python client.
 - **Frontend**: Next.js 14 (Pages Router), React 18, TypeScript, TailwindCSS, Axios, Supabase JS, Recharts, Lucide.
 - **Persistence**: Supabase (Postgres + Auth). In-memory store as a fast cache, with snapshot fallback.
-- **AI**: Z.AI GLM (`glm-4.5` by default) via `https://api.z.ai/api/paas/v4/chat/completions`. Mock provider available for demos without an API key.
+- **AI**: Local stack uses Gemini API; deployed Vercel build currently uses Z.AI GLM and may fall back to deterministic output if live AI is unavailable. Mock provider available for demos without an API key.
 
 ---
 
@@ -46,7 +65,7 @@ StockWise/
 │  ├─ src/pages                  # /, /login, /signup, /dashboard/[id], /records/[id],
 │  │                             # /simulation/[id]/[itemId], /explanation/[id]/[itemId],
 │  │                             # /export/[id], /history, /settings
-│  ├─ src/components             # Dashboard nav, AICopilotPanel, AIDecisionBriefCard,
+│  ├─ src/components             # Dashboard nav, AIAdvisorPanel, AIDecisionBriefCard,
 │  │                             # InventoryItemForm, ItemSimulation, ExplanationDrawer, common
 │  └─ src/lib                    # auth, analysisSession, navigationTargets, supabase, ...
 ├─ supabase/migrations/          # SQL migrations for analysis snapshots and item ownership
@@ -235,7 +254,7 @@ npm test            # jest unit tests
 1. **Daily Overview** — open the Decision Dashboard for stock health, KPI cards, and the AI Decision Brief.
 2. **Action Board** — sort by Date / Urgency / Waste Risk and follow `RESTOCK_NOW`, `BUY_LESS`, `DELAY_PURCHASE` recommendations.
 3. **Test a Reorder** — click **Simulate** on any row to compare aggressive vs conservative quantities.
-4. **Ask the Copilot** — open the AI Copilot panel for grounded follow-ups; hand off a simulation result to ask "what changed?"
+4. **Ask the Advisor** — open the AI Advisor panel for grounded follow-ups; hand off a simulation result to ask "what changed?"
 5. **Review Records** — fix any data issues at `/records/{id}`; recommendations refresh automatically.
 6. **Export / History** — download CSV/JSON or print to PDF from `/export/{id}`; revisit past entries at `/history`.
 
@@ -257,3 +276,10 @@ npm test            # jest unit tests
 1. Create a branch off `main`.
 2. Run `pytest` and `npm test` before opening a PR.
 3. Keep validation, metric computation, recommendation logic, simulation, and AI integration in their existing modules — that separation is part of the maintainability requirements in the PRD.
+
+## 📞 Contact
+
+For any inquiries regarding this project, please contact:
+
+**Lim Wey Cheng**  
+Email: **weychenglim@gmail.com**

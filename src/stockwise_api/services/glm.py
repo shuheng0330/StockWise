@@ -34,6 +34,12 @@ SYSTEM_PROMPT = (
     "priority_level must be HIGH, MEDIUM, or LOW in uppercase. "
     "Keep each text field concise. Do not add markdown or code fences."
 )
+STRICT_EXPLANATION_PROMPT_SUFFIX = (
+    " Return compact valid JSON only. "
+    "Do not use the words sales, revenue, or profit. "
+    "Keep every text field under 220 characters. "
+    "Use only stock, usage, lead-time, waste, cover, and cash language."
+)
 CHAT_SYSTEM_PROMPT = (
     "You are StockWise AI Advisor for small cafe operators. "
     "Answer only from the provided analysis and optional simulation context. "
@@ -43,6 +49,12 @@ CHAT_SYSTEM_PROMPT = (
     "supporting_points and suggested_follow_ups must be lists with one to three strings. "
     "Keep the answer concise, operational, and owner-friendly. Do not add markdown or code fences."
 )
+STRICT_CHAT_PROMPT_SUFFIX = (
+    " Return compact valid JSON only. "
+    "Do not use the words sales, revenue, or profit. "
+    "Keep answer and warning_flag under 220 characters. "
+    "Keep each supporting point and follow-up under 140 characters."
+)
 DECISION_BRIEF_SYSTEM_PROMPT = (
     "You are StockWise AI Decision Brief for small cafe operators. "
     "Use only the provided analysis, item list, and deterministic impact notes. "
@@ -51,6 +63,11 @@ DECISION_BRIEF_SYSTEM_PROMPT = (
     "top_tradeoffs must be a list with one or two strings. "
     "Keep every string under 18 words. "
     "Return compact valid JSON only. Do not add markdown or code fences."
+)
+STRICT_DECISION_BRIEF_PROMPT_SUFFIX = (
+    " Keep summary, confidence_note, and warning_flag under 220 characters. "
+    "Keep each tradeoff under 140 characters. "
+    "Do not use the words sales, revenue, or profit."
 )
 
 
@@ -87,6 +104,10 @@ def _env_bool(name: str, default: bool) -> bool:
         return False
     print(f"Ignoring invalid {name} value: {raw_value!r}")
     return default
+
+
+def _is_gemini_endpoint(base_url: str) -> bool:
+    return "generativelanguage.googleapis.com" in base_url.lower()
 
 
 def _strip_json_fences(text: str) -> str:
@@ -218,6 +239,12 @@ def _compact_model_context(context: dict) -> dict:
             if context.get(key) is not None
         }
     return compact
+
+
+def _system_prompt(base_prompt: str, context: dict, strict_suffix: str = "") -> str:
+    if context.get("_strict_json") and strict_suffix:
+        return f"{base_prompt}{strict_suffix}"
+    return base_prompt
 
 
 def _compact_chat_context(context: dict) -> dict:
@@ -686,7 +713,11 @@ class LiveZAIProvider(BaseZAIProvider):
         self.model = model or os.getenv("ZAI_MODEL", "glm-4.5")
         self.timeout = self._build_timeout(timeout_seconds)
         self.max_tokens = max_tokens if max_tokens is not None else _env_int("ZAI_MAX_TOKENS", 1600)
-        self.stream = _env_bool("ZAI_STREAM", default=("api.ilmu.ai" not in self.base_url.lower()))
+        self.is_gemini = _is_gemini_endpoint(self.base_url)
+        self.stream = _env_bool(
+            "ZAI_STREAM",
+            default=("api.ilmu.ai" not in self.base_url.lower() and not self.is_gemini),
+        )
 
     def _build_timeout(self, timeout_seconds: float | None) -> httpx.Timeout:
         if timeout_seconds is not None:
@@ -700,36 +731,66 @@ class LiveZAIProvider(BaseZAIProvider):
 
     def generate_explanation(self, context: dict) -> str:
         model_context = _compact_model_context(context)
-        return self._generate_json_response(SYSTEM_PROMPT, model_context)
+        return self._generate_json_response(
+            _system_prompt(SYSTEM_PROMPT, context, STRICT_EXPLANATION_PROMPT_SUFFIX),
+            model_context,
+        )
 
     def generate_inventory_chat(self, context: dict) -> str:
         model_context = _compact_chat_context(context)
-        raw = self._generate_json_response(
-            CHAT_SYSTEM_PROMPT,
-            model_context,
+        narrative = self._generate_narrative_json(
+            context=context,
+            model_context=model_context,
+            base_prompt=CHAT_SYSTEM_PROMPT,
+            strict_suffix=STRICT_CHAT_PROMPT_SUFFIX,
             max_tokens=CHAT_NARRATIVE_TOKENS,
         )
-        narrative = _loads_model_json(raw)
         return _assemble_live_chat_response(context, narrative)
 
     def generate_decision_brief(self, context: dict) -> str:
         model_context = _compact_decision_brief_context(context)
-        raw = self._generate_json_response(
-            DECISION_BRIEF_SYSTEM_PROMPT,
-            model_context,
+        narrative = self._generate_narrative_json(
+            context=context,
+            model_context=model_context,
+            base_prompt=DECISION_BRIEF_SYSTEM_PROMPT,
+            strict_suffix=STRICT_DECISION_BRIEF_PROMPT_SUFFIX,
             max_tokens=DECISION_BRIEF_NARRATIVE_TOKENS,
         )
-        narrative = _loads_model_json(raw)
         return _assemble_live_decision_brief(context, narrative)
+
+    def _generate_narrative_json(
+        self,
+        *,
+        context: dict,
+        model_context: dict,
+        base_prompt: str,
+        strict_suffix: str,
+        max_tokens: int,
+    ) -> dict:
+        raw = self._generate_json_response(
+            _system_prompt(base_prompt, context, strict_suffix),
+            model_context,
+            max_tokens=max_tokens,
+        )
+        try:
+            return _loads_model_json(raw)
+        except Exception:
+            if context.get("_strict_json"):
+                raise
+            retry_context = {**context, "_strict_json": True}
+            retry_raw = self._generate_json_response(
+                _system_prompt(base_prompt, retry_context, strict_suffix),
+                model_context,
+                max_tokens=max_tokens,
+            )
+            return _loads_model_json(retry_raw)
 
     def _generate_json_response(self, system_prompt: str, model_context: dict, max_tokens: int | None = None) -> str:
         payload = {
             "model": self.model,
-            "response_format": {"type": "json_object"},
             "temperature": 0.2,
             "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
             "reasoning_effort": "low",
-            "thinking": {"type": "disabled"},
             "stream": self.stream,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -739,6 +800,9 @@ class LiveZAIProvider(BaseZAIProvider):
                 },
             ],
         }
+        if not self.is_gemini:
+            payload["response_format"] = {"type": "json_object"}
+            payload["thinking"] = {"type": "disabled"}
         started_at = time.monotonic()
         try:
             with httpx.Client(timeout=self.timeout) as client:
