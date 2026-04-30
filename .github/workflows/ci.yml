@@ -105,7 +105,7 @@ jobs:
           GLM_MODE: mock
           STOCKWISE_SUPABASE_ENABLED: "false"
         run: |
-          uvicorn src.stockwise_api.server:app --host 0.0.0.0 --port 8000 &
+          uvicorn "stockwise_api.api.app:create_app" --factory --app-dir src --host 0.0.0.0 --port 8000 &
           sleep 3
           curl -f http://localhost:8000/health
 
