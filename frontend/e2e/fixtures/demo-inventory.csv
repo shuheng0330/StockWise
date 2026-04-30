@@ -1,0 +1,6 @@
+Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage
+2024-01-15,1,Chicken Breast,Protein,Poultry,kg,8,20,4.5,3,12.50,FreshFarm Co,1.1,5.0
+2024-01-15,2,Basmati Rice,Grains,Rice,kg,120,30,8.0,7,2.80,GrainMart,1.0,1.0
+2024-01-15,3,Olive Oil,Condiments,Oil,liter,3,10,0.8,5,18.00,MedFoods,1.0,0.5
+2024-01-15,4,Tomatoes,Vegetables,Fresh,kg,5,15,6.0,2,3.20,LocalFarm,1.2,12.0
+2024-01-15,5,Pasta,Grains,Pasta,kg,80,20,3.5,10,1.90,ItalFoods,1.0,0.5

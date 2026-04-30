@@ -1,5 +1,5 @@
 from dataclasses import is_dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 import json
 from typing import Callable
 import os
@@ -598,6 +598,19 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.get("/health", tags=["meta"])
+    async def health_check():
+        supabase_raw = os.getenv("STOCKWISE_SUPABASE_ENABLED", "")
+        supabase_enabled = supabase_raw.lower() not in ("false", "0", "")
+        return {
+            "status": "ok",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "glm_mode": os.getenv("GLM_MODE", "mock"),
+            "supabase_enabled": supabase_enabled,
+            "version": "0.1.0",
+            "fallback_ready": True,
+        }
 
     app.state.store = InMemoryAnalysisStore()
     app.state.supabase_store = supabase_store if supabase_store is not None else _build_supabase_store(enable_supabase)

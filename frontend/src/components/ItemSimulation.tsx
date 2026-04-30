@@ -116,12 +116,14 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
               type="number"
               min="0"
               step={item.unit === 'pieces' ? '1' : '0.01'}
+              data-testid="reorder-qty-input"
               value={simQty}
               onChange={(e) => setSimQty(parseFloat(e.target.value) || 0)}
             />
           </div>
           <Button
             variant="primary"
+            data-testid="run-simulation-btn"
             onClick={handleSimulate}
             loading={isLoading}
             className="w-full sm:w-auto"
@@ -140,7 +142,7 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
 
       {/* Simulation Results */}
       {simulationResult && (
-        <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+        <div data-testid="simulation-result" className="bg-blue-50 rounded-lg p-4 border border-blue-200">
           <h4 className="font-semibold text-gray-900 mb-3">Simulated Results</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
             <div>

@@ -18,6 +18,7 @@ import {
     Menu,
     Settings,
     Upload,
+    Activity,
     X
 } from 'lucide-react';
 import Link from 'next/link';
@@ -149,7 +150,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 href="/"
                 active={activeSection === 'home'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             {/* Desktop-only hover submenu */}
@@ -223,7 +223,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 disabled={!navigationTargets.analysisHref}
                 active={activeSection === 'dashboard'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -233,7 +232,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 disabled={!navigationTargets.recordsHref}
                 active={activeSection === 'records'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -243,7 +241,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 disabled={!navigationTargets.exportHref}
                 active={activeSection === 'export'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -252,7 +249,6 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 href="/history"
                 active={activeSection === 'history'}
                 onClick={closeMobile}
-                fullWidth
             />
 
             <NavItem
@@ -261,7 +257,14 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                 href="/settings"
                 active={activeSection === 'settings'}
                 onClick={closeMobile}
-                fullWidth
+            />
+
+            <NavItem
+                icon={<Activity className="w-5 h-5" />}
+                label="Status"
+                href="/judge-mode"
+                active={activeSection === 'judge-mode'}
+                onClick={closeMobile}
             />
 
             <button
@@ -310,6 +313,16 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                     <div className="border-t border-slate-200 py-3 lg:hidden">
                         <div className="flex flex-col gap-1 rounded-2xl bg-slate-50 p-2">
                             {navLinks}
+                            <button
+                                onClick={() => {
+                                    closeMobile();
+                                    handleLogout();
+                                }}
+                                className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-gray-700 hover:bg-gray-100 hover:text-gray-900 font-medium"
+                            >
+                                <LogOut className="w-5 h-5" />
+                                <span className="font-medium">Logout</span>
+                            </button>
                         </div>
                     </div>
                 )}
