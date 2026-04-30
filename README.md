@@ -1,6 +1,10 @@
 # StockWise 📦
 **AI-Powered Decision System for Inventory Reordering and Waste Reduction**
 
+[![CI](https://github.com/shuheng0330/StockWise/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shuheng0330/StockWise/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Next.js 14](https://img.shields.io/badge/next.js-14-black.svg)](https://nextjs.org/)
+
 StockWise is a web-based decision intelligence system for small cafes and kiosks. It converts structured inventory records into ranked actions, simulation-based trade-off analysis, and AI-powered explanations that help non-technical operators decide what to **restock now**, what to **buy less of**, and what to **delay**.
 
 The MVP is grounded in a 100-day, 1,000-record sample dataset across 10 recurring inventory items, so it demonstrates practical decision support without claiming advanced forecasting or revenue prediction.
