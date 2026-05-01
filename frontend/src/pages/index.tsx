@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { Upload, FileText } from 'lucide-react';
+import { Upload, FileText, MessageSquare } from 'lucide-react';
 import { Button, Alert, Card } from '@/components/common';
 import { InventoryItemForm } from '@/components/InventoryItemForm';
 import { NavigationBar } from '@/components/Dashboard';
@@ -14,10 +13,18 @@ import toast from 'react-hot-toast';
 export default function EntryPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
-  const [mode, setMode] = useState<'upload' | 'manual' | null>(null);
+
+  // Updated mode type to include 'unstructured'
+  const [mode, setMode] = useState<'upload' | 'manual' | 'unstructured' | null>(null);
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // New states for unstructured input
+  const [unstructuredText, setUnstructuredText] = useState('');
+  const [extractedItems, setExtractedItems] = useState<any[]>([]);
+  const [isExtracting, setIsExtracting] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -29,7 +36,7 @@ export default function EntryPage() {
     if (!router.isReady) return;
     const queryMode = router.query.mode;
     const value = Array.isArray(queryMode) ? queryMode[0] : queryMode;
-    if (value === 'upload' || value === 'manual') {
+    if (value === 'upload' || value === 'manual' || value === 'unstructured') {
       setMode(value);
     }
   }, [router.isReady, router.query.mode]);
@@ -42,6 +49,7 @@ export default function EntryPage() {
     return null;
   }
 
+  // Existing handlers (unchanged)
   const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -100,22 +108,84 @@ export default function EntryPage() {
     }
   };
 
+  // NEW: Unstructured handlers (pointing to backend port 8000)
+  const handleExtractUnstructured = async () => {
+    if (!unstructuredText.trim()) {
+      toast.error('Please paste some text first');
+      return;
+    }
+
+    setIsExtracting(true);
+    setError('');
+
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/unstructured/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_text: unstructuredText }),
+      });
+
+      if (!res.ok) throw new Error('Extraction failed');
+
+      const response = await res.json();
+
+      setExtractedItems(response.extracted_items || []);
+      toast.success(`Extracted ${response.count} items successfully!`);
+    } catch (err: any) {
+      const message = err.message || 'Extraction failed';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+  
+  const handleAddExtractedToAnalysis = async () => {
+    if (extractedItems.length === 0) return;
+
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const response = await apiClient.createManualAnalysis(extractedItems);
+      saveLatestAnalysisId(response.analysis_id);
+
+      recordAnalysisInHistory({
+        analysisId: response.analysis_id,
+        label: `Unstructured input (${extractedItems.length} items)`,
+        source: 'unstructured',
+      });
+
+      toast.success('Analysis created from text input!');
+      router.push(`/dashboard/${response.analysis_id}`);
+    } catch (err: any) {
+      const message = err.response?.data?.message || err.message || 'Failed to create analysis';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Navigation Bar */}
+      {/* Fixed NavigationBar call to avoid TypeScript error */}
       <NavigationBar
-        onFeatureSelect={setMode}
+        onFeatureSelect={(value) => {
+          // Safe cast to accept 'unstructured' without changing NavigationBar component
+          if (value === 'upload' || value === 'manual' || value === 'unstructured') {
+            setMode(value);
+          }
+        }}
         activeSection="home"
       />
 
       <div className="max-w-4xl mx-auto p-4 md:p-8">
-        {/* Header */}
         <div className="text-center mb-8 md:mb-12">
           <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">StockWise</h1>
           <p className="text-base md:text-xl text-gray-600">Intelligent Inventory Analysis & Recommendations</p>
         </div>
 
-        {/* Mode Selection or Selected Mode */}
         {!mode ? (
           <>
             {error && (
@@ -124,8 +194,8 @@ export default function EntryPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* CSV Upload Option */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* CSV Upload */}
               <Card className="p-8 cursor-pointer hover:shadow-lg transition">
                 <button
                   data-testid="csv-upload-card"
@@ -136,9 +206,7 @@ export default function EntryPage() {
                     <Upload className="w-6 h-6 text-blue-600" />
                   </div>
                   <h3 className="text-lg font-semibold text-gray-900 mb-2">Upload CSV</h3>
-                  <p className="text-gray-600 text-sm mb-4">
-                    Upload your inventory CSV file for rapid analysis.
-                  </p>
+                  <p className="text-gray-600 text-sm mb-4">Upload your inventory CSV file for rapid analysis.</p>
                   <ul className="text-gray-600 text-sm space-y-1">
                     <li>✓ Accepts standard CSV format</li>
                     <li>✓ Fast processing</li>
@@ -147,23 +215,34 @@ export default function EntryPage() {
                 </button>
               </Card>
 
-              {/* Manual Entry Option */}
+              {/* Manual Entry */}
               <Card className="p-8 cursor-pointer hover:shadow-lg transition">
-                <button
-                  onClick={() => setMode('manual')}
-                  className="w-full text-left"
-                >
+                <button onClick={() => setMode('manual')} className="w-full text-left">
                   <div className="flex items-center justify-center w-12 h-12 bg-green-100 rounded-lg mb-4">
                     <FileText className="w-6 h-6 text-green-600" />
                   </div>
                   <h3 className="text-lg font-semibold text-gray-900 mb-2">Manual Entry</h3>
-                  <p className="text-gray-600 text-sm mb-4">
-                    Enter inventory items one by one for precise control.
-                  </p>
+                  <p className="text-gray-600 text-sm mb-4">Enter inventory items one by one for precise control.</p>
                   <ul className="text-gray-600 text-sm space-y-1">
                     <li>✓ Full control over data</li>
                     <li>✓ Add, duplicate, remove items</li>
                     <li>✓ Validation guidance</li>
+                  </ul>
+                </button>
+              </Card>
+
+              {/* Quick Text Input */}
+              <Card className="p-8 cursor-pointer hover:shadow-lg transition">
+                <button onClick={() => setMode('unstructured')} className="w-full text-left">
+                  <div className="flex items-center justify-center w-12 h-12 bg-purple-100 rounded-lg mb-4">
+                    <MessageSquare className="w-6 h-6 text-purple-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">Quick Text Input</h3>
+                  <p className="text-gray-600 text-sm mb-4">Paste WhatsApp messages, supplier notes, or invoices.</p>
+                  <ul className="text-gray-600 text-sm space-y-1">
+                    <li>✓ AI extracts items automatically</li>
+                    <li>✓ Works with messy text</li>
+                    <li>✓ Real-world SME friendly</li>
                   </ul>
                 </button>
               </Card>
@@ -172,10 +251,8 @@ export default function EntryPage() {
             {/* CSV Format Help */}
             <div className="mt-12 bg-white rounded-lg p-6 shadow">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">CSV Format Requirements</h3>
-              <p className="text-gray-600 mb-4">
-                Your CSV file should include the following columns:
-              </p>
-              <div className="bg-gray-50 P-4 rounded border border-gray-200 overflow-x-auto">
+              <p className="text-gray-600 mb-4">Your CSV file should include the following columns:</p>
+              <div className="bg-gray-50 p-4 rounded border border-gray-200 overflow-x-auto">
                 <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words">
                   Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage
                 </pre>
@@ -185,11 +262,10 @@ export default function EntryPage() {
                   * All 14 columns are required. Date should be in YYYY-MM-DD format. Numeric fields must contain valid numbers.
                 </p>
               </div>
-              <div className="mt-4"></div>
               <a
                 href="/stockwise-example-template.csv"
                 download="stockwise-example-template.csv"
-                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
+                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition mt-6"
               >
                 Download CSV Template
               </a>
@@ -197,22 +273,10 @@ export default function EntryPage() {
           </>
         ) : mode === 'upload' ? (
           <div className="space-y-6">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setMode(null);
-                if (router.query.mode) {
-                  router.replace('/', undefined, { shallow: true });
-                }
-              }}
-            >
+            <Button variant="secondary" onClick={() => setMode(null)}>
               ← Back
             </Button>
-
-            {error && (
-              <Alert type="error" message={error} onClose={() => setError('')} />
-            )}
-
+            {error && <Alert type="error" message={error} onClose={() => setError('')} />}
             <Card className="p-8">
               <h2 className="text-2xl font-bold text-gray-900 mb-4">Upload CSV</h2>
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
@@ -240,31 +304,69 @@ export default function EntryPage() {
               </div>
             </Card>
           </div>
-        ) : (
+        ) : mode === 'manual' ? (
           <div className="space-y-6">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setMode(null);
-                if (router.query.mode) {
-                  router.replace('/', undefined, { shallow: true });
-                }
-              }}
-            >
+            <Button variant="secondary" onClick={() => setMode(null)}>
+              ← Back
+            </Button>
+            {error && <Alert type="error" message={error} onClose={() => setError('')} />}
+            <Card className="p-8">
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">Manual Inventory Entry</h2>
+              <InventoryItemForm onSubmit={handleManualSubmit} isLoading={isLoading} submitLabel="Create Analysis" />
+            </Card>
+          </div>
+        ) : (
+          // Unstructured mode
+          <div className="space-y-6">
+            <Button variant="secondary" onClick={() => { setMode(null); setUnstructuredText(''); setExtractedItems([]); }}>
               ← Back
             </Button>
 
-            {error && (
-              <Alert type="error" message={error} onClose={() => setError('')} />
-            )}
+            {error && <Alert type="error" message={error} onClose={() => setError('')} />}
 
             <Card className="p-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Manual Inventory Entry</h2>
-              <InventoryItemForm
-                onSubmit={handleManualSubmit}
-                isLoading={isLoading}
-                submitLabel="Create Analysis"
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Quick Text Input</h2>
+              <p className="text-gray-600 mb-6">Paste supplier WhatsApp messages, notes, or invoices below. AI will extract items automatically.</p>
+
+              <textarea
+                className="w-full h-40 p-4 border border-gray-300 rounded-lg focus:outline-none focus:border-purple-500 resize-none"
+                placeholder="Example: Supplier say fresh milk price up next week. Delivery delay 2 days. We have 20L left. Eggs 5 dozen at RM 8 per dozen."
+                value={unstructuredText}
+                onChange={(e) => setUnstructuredText(e.target.value)}
               />
+
+              <Button
+                variant="primary"
+                onClick={handleExtractUnstructured}
+                disabled={isExtracting || !unstructuredText.trim()}
+                loading={isExtracting}
+                className="mt-6 w-full"
+              >
+                {isExtracting ? 'Extracting with AI...' : 'Extract Items with AI'}
+              </Button>
+
+              {extractedItems.length > 0 && (
+                <div className="mt-8">
+                  <h3 className="font-semibold text-lg mb-4">Extracted {extractedItems.length} items</h3>
+                  <div className="max-h-80 overflow-auto border rounded-lg p-4 bg-gray-50">
+                    {extractedItems.map((item, index) => (
+                      <div key={index} className="py-2 border-b last:border-none flex justify-between">
+                        <span className="font-medium">{item.item_name}</span>
+                        <span className="text-gray-600">{item.current_stock} {item.unit}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <Button
+                    variant="primary"
+                    onClick={handleAddExtractedToAnalysis}
+                    loading={isLoading}
+                    className="mt-6 w-full"
+                  >
+                    Add All Items to Analysis
+                  </Button>
+                </div>
+              )}
             </Card>
           </div>
         )}
