@@ -213,7 +213,7 @@ export default function Dashboard() {
               <Link href={`/records/${analysisId}`}>
                 <Button variant="secondary">Review Records</Button>
               </Link>
-              <Link href={`/export/${analysisId}`}>
+              <Link href={`/export/${analysisId}`} data-testid="export-report-link">
                 <Button variant="secondary">Export</Button>
               </Link>
               <Link href="/">
@@ -223,7 +223,7 @@ export default function Dashboard() {
           </div>
 
           {/* KPI Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4">
+          <div data-testid="kpi-cards" className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -290,7 +290,7 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
-        <div className="mb-6">
+        <div data-testid="decision-brief" className="mb-6">
           <AIDecisionBriefCard
             analysisId={analysisIdValue as string}
             isLoading={isBriefLoading}
@@ -333,7 +333,7 @@ export default function Dashboard() {
         {/* Items Table */}
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table data-testid="items-table" className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Item</th>
@@ -411,13 +411,13 @@ export default function Dashboard() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
+                      <span className={`inline-flex whitespace-nowrap px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
                         {item.recommended_action.replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">
                       <div className="flex gap-2">
-                        <Link href={`/simulation/${analysisId}/${item.item_id}`}>
+                        <Link href={`/simulation/${analysisId}/${item.item_id}`} data-testid="simulate-btn">
                           <Button variant="secondary" size="sm">Simulate</Button>
                         </Link>
                         <Link href={`/explanation/${analysisId}/${item.item_id}`}>
