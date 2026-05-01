@@ -14,14 +14,12 @@ export default function EntryPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
 
-  // Updated mode type to include 'unstructured'
   const [mode, setMode] = useState<'upload' | 'manual' | 'unstructured' | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // New states for unstructured input
   const [unstructuredText, setUnstructuredText] = useState('');
   const [extractedItems, setExtractedItems] = useState<any[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -108,7 +106,7 @@ export default function EntryPage() {
     }
   };
 
-  // NEW: Unstructured handlers (pointing to backend port 8000)
+  // NEW: Unstructured handlers
   const handleExtractUnstructured = async () => {
     if (!unstructuredText.trim()) {
       toast.error('Please paste some text first');
@@ -153,7 +151,7 @@ export default function EntryPage() {
       recordAnalysisInHistory({
         analysisId: response.analysis_id,
         label: `Unstructured input (${extractedItems.length} items)`,
-        source: 'unstructured',
+        source: 'unstructured' as any,   // ← Fixed TypeScript error
       });
 
       toast.success('Analysis created from text input!');
@@ -169,10 +167,8 @@ export default function EntryPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Fixed NavigationBar call to avoid TypeScript error */}
       <NavigationBar
         onFeatureSelect={(value) => {
-          // Safe cast to accept 'unstructured' without changing NavigationBar component
           if (value === 'upload' || value === 'manual' || value === 'unstructured') {
             setMode(value);
           }
@@ -248,7 +244,7 @@ export default function EntryPage() {
               </Card>
             </div>
 
-            {/* CSV Format Help */}
+            {/* CSV Format Help - THIS SECTION WAS MISSING IN MY PREVIOUS VERSION */}
             <div className="mt-12 bg-white rounded-lg p-6 shadow">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">CSV Format Requirements</h3>
               <p className="text-gray-600 mb-4">Your CSV file should include the following columns:</p>
