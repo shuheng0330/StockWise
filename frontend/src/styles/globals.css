@@ -21,3 +21,22 @@ body {
 code {
     font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
 }
+
+/* Table density preference (set from /settings, applied to <html> in _app.tsx) */
+html.density-comfortable td,
+html.density-comfortable th {
+    padding-top: 0.625rem;
+    padding-bottom: 0.625rem;
+}
+
+html.density-compact td,
+html.density-compact th {
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+}
+
+html.density-spacious td,
+html.density-spacious th {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+}
