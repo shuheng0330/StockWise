@@ -1,26 +1,116 @@
 import React, { useState } from 'react';
-import { InventoryItem, SimulationResponse } from '@/types';
+import { InventoryItem, SimulationResponse, TradeoffVerdictResponse } from '@/types';
 import { Button, Input } from './common';
+import { Sparkles } from 'lucide-react';
+import { runSimulationWithVerdict } from '@/lib/simulationFlow';
 
 interface ItemSimulationProps {
   item: InventoryItem;
   analysisId: string;
   onSimulate: (qty: number) => Promise<any>;
+  onGenerateTradeoffVerdict?: (qty: number) => Promise<TradeoffVerdictResponse>;
   isLoading?: boolean;
 }
 
-export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimulationProps) {
+interface TradeoffVerdictCardProps {
+  verdict: TradeoffVerdictResponse | null;
+  isLoading: boolean;
+  error: string;
+  onRetry?: () => void;
+}
+
+function sourceLabel(source: TradeoffVerdictResponse['source']) {
+  return source === 'live' ? 'live' : source === 'mock' ? 'mock' : 'fallback';
+}
+
+export function TradeoffVerdictCard({ verdict, isLoading, error, onRetry }: TradeoffVerdictCardProps) {
+  if (isLoading) {
+    return (
+      <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+        <div className="flex items-center gap-2 text-indigo-900">
+          <Sparkles className="h-4 w-4 animate-pulse" />
+          <p className="font-semibold">Generating AI trade-off verdict...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p>{error}</p>
+          {onRetry && (
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              Retry AI
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!verdict) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-lg border border-indigo-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-indigo-700">
+            <Sparkles className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-wide">AI Trade-off Verdict</span>
+          </div>
+          <p className="mt-2 text-xl font-bold text-gray-950">{verdict.verdict}</p>
+          <p className="mt-1 text-sm leading-6 text-gray-700">{verdict.reason}</p>
+        </div>
+        <span className="w-fit rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase text-indigo-700">
+          {sourceLabel(verdict.source)}
+        </span>
+      </div>
+      <p className="mt-3 text-xs text-gray-500">{verdict.confidence_note}</p>
+    </div>
+  );
+}
+
+export function ItemSimulation({
+  item,
+  onSimulate,
+  onGenerateTradeoffVerdict,
+  isLoading = false,
+}: ItemSimulationProps) {
   const [simQty, setSimQty] = useState<number>(item.reorder_level);
   const [simulationResult, setSimulationResult] = useState<SimulationResponse | null>(null);
+  const [tradeoffVerdict, setTradeoffVerdict] = useState<TradeoffVerdictResponse | null>(null);
+  const [isVerdictLoading, setIsVerdictLoading] = useState(false);
+  const [verdictError, setVerdictError] = useState<string>('');
   const [error, setError] = useState<string>('');
 
   const handleSimulate = async () => {
     setError('');
+    setVerdictError('');
+    setTradeoffVerdict(null);
     try {
-      const result = await onSimulate(simQty);
-      setSimulationResult(result);
+      if (!onGenerateTradeoffVerdict) {
+        const result = await onSimulate(simQty);
+        setSimulationResult(result);
+        return;
+      }
+
+      setIsVerdictLoading(true);
+      await runSimulationWithVerdict(
+        simQty,
+        onSimulate,
+        onGenerateTradeoffVerdict,
+        setSimulationResult,
+        setTradeoffVerdict,
+        () => setVerdictError('AI trade-off verdict is unavailable right now. The simulation result is still usable.')
+      );
     } catch (err: any) {
       setError(err.message || 'Simulation failed');
+    } finally {
+      setIsVerdictLoading(false);
     }
   };
 
@@ -193,6 +283,30 @@ export function ItemSimulation({ item, onSimulate, isLoading = false }: ItemSimu
             <strong>Risk Change:</strong> {getRiskChangeLabel(simulationResult.simulated_risk_change)}
           </div>
         </div>
+      )}
+
+      {simulationResult && (
+        <TradeoffVerdictCard
+          verdict={tradeoffVerdict}
+          isLoading={isVerdictLoading}
+          error={verdictError}
+          onRetry={
+            onGenerateTradeoffVerdict
+              ? async () => {
+                  setVerdictError('');
+                  setIsVerdictLoading(true);
+                  try {
+                    const verdict = await onGenerateTradeoffVerdict(simulationResult.simulated_order_qty);
+                    setTradeoffVerdict(verdict);
+                  } catch {
+                    setVerdictError('AI trade-off verdict is unavailable right now. The simulation result is still usable.');
+                  } finally {
+                    setIsVerdictLoading(false);
+                  }
+                }
+              : undefined
+          }
+        />
       )}
     </div>
   );

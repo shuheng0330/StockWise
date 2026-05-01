@@ -24,6 +24,8 @@ from stockwise_api.schemas import (
     RecordItem,
     SimulationRequest,
     SimulationResponse,
+    TradeoffVerdictRequest,
+    TradeoffVerdictResponse,
     RecordUpdateRequest,
     RecordsResponse,
 )
@@ -31,6 +33,7 @@ from stockwise_api.services.glm import (
     build_decision_brief_context,
     build_explanation_context,
     build_inventory_chat_context,
+    build_tradeoff_verdict_context,
     provider_from_env,
 )
 from stockwise_api.services.manual_input import (
@@ -46,9 +49,12 @@ from stockwise_api.services.parsing import (
     build_fallback_chat_response,
     ExplanationValidationError,
     build_fallback_explanation,
+    build_fallback_tradeoff_verdict,
     parse_chat_response,
     parse_decision_brief_response,
     parse_explanation_response,
+    parse_tradeoff_verdict_response,
+    TradeoffVerdictValidationError,
 )
 from stockwise_api.services.recommendations import (
     build_kpi_summary,
@@ -110,13 +116,30 @@ def _ai_explanation_cache_key(
     )
 
 
+def _ai_tradeoff_verdict_cache_key(
+    *,
+    analysis_id: str,
+    owner_id: str | None,
+    item_id: int,
+    simulated_order_qty: float,
+) -> str:
+    return _stable_json(
+        {
+            "owner": owner_id or "anonymous",
+            "analysis_id": analysis_id,
+            "item_id": item_id,
+            "simulated_order_qty": simulated_order_qty,
+        }
+    )
+
+
 def _clear_ai_cache_for_analysis(app: FastAPI, analysis_id: str, owner_id: str | None = None) -> None:
     cache = getattr(app.state, "ai_response_cache", None)
     if not cache:
         return
     owner_prefix = f"{owner_id or 'anonymous'}:{analysis_id}"
     cache.get("decision_briefs", {}).pop(owner_prefix, None)
-    for bucket_name in ("chats", "explanations"):
+    for bucket_name in ("chats", "explanations", "tradeoff_verdicts"):
         bucket = cache.get(bucket_name, {})
         for key in list(bucket.keys()):
             try:
@@ -603,7 +626,12 @@ def create_app(
     app.state.supabase_store = supabase_store if supabase_store is not None else _build_supabase_store(enable_supabase)
     app.state.glm_provider = glm_provider or provider_from_env()
     app.state.auth_user_resolver = auth_user_resolver or _build_supabase_auth_resolver(enable_supabase)
-    app.state.ai_response_cache = {"decision_briefs": {}, "chats": {}, "explanations": {}}
+    app.state.ai_response_cache = {
+        "decision_briefs": {},
+        "chats": {},
+        "explanations": {},
+        "tradeoff_verdicts": {},
+    }
 
     @app.exception_handler(ValidationError)
     async def handle_validation_error(_: Request, exc: ValidationError):
@@ -758,6 +786,61 @@ def create_app(
         item = _load_analysis_item(app, analysis_id, item_id, user_id=user_id)
         simulated = simulate_item_quantity(item, payload.simulated_order_qty)
         return simulated
+
+    @app.post(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}/tradeoff-verdict",
+        response_model=TradeoffVerdictResponse,
+    )
+    async def tradeoff_verdict(
+        analysis_id: str,
+        item_id: int,
+        request: Request,
+        payload: TradeoffVerdictRequest,
+        refresh: bool = Query(False),
+    ):
+        user_id = _require_authenticated_user(app, request)
+        item = _load_analysis_item(app, analysis_id, item_id, user_id=user_id)
+        simulation = simulate_item_quantity(item, payload.simulated_order_qty)
+        context = build_tradeoff_verdict_context(item, simulation)
+        cache_key = _ai_tradeoff_verdict_cache_key(
+            analysis_id=analysis_id,
+            owner_id=user_id,
+            item_id=item_id,
+            simulated_order_qty=simulation["simulated_order_qty"],
+        )
+        verdict_cache = app.state.ai_response_cache["tradeoff_verdicts"]
+        if not refresh and cache_key in verdict_cache:
+            return verdict_cache[cache_key]
+
+        provider = app.state.glm_provider
+        try:
+            raw = provider.generate_tradeoff_verdict(context)
+            parsed = parse_tradeoff_verdict_response(raw, context)
+            response = {"source": provider.source, **parsed}
+            verdict_cache[cache_key] = response
+            return response
+        except TradeoffVerdictValidationError as exc:
+            print(f"Trade-off verdict parse failed on first attempt: {type(exc).__name__}: {exc}")
+            try:
+                strict_context = {**context, "_strict_json": True}
+                raw = provider.generate_tradeoff_verdict(strict_context)
+                parsed = parse_tradeoff_verdict_response(raw, context, safety_status="retried")
+                response = {"source": provider.source, **parsed}
+                verdict_cache[cache_key] = response
+                return response
+            except Exception as retry_exc:
+                print(
+                    "Trade-off verdict retry failed, using fallback: "
+                    f"{type(retry_exc).__name__}: {retry_exc}"
+                )
+                response = build_fallback_tradeoff_verdict(context)
+                verdict_cache[cache_key] = response
+                return response
+        except Exception as exc:
+            print(f"Trade-off verdict provider failed, using fallback: {type(exc).__name__}: {exc}")
+            response = build_fallback_tradeoff_verdict(context)
+            verdict_cache[cache_key] = response
+            return response
 
     @app.patch(
         "/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordItem
