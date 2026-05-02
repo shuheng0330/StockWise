@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Clock, FileText, Trash2, Upload } from 'lucide-react';
+import { Clock, FileText, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Alert, Badge, Button, Card } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
@@ -8,7 +8,6 @@ import {
   AnalysisHistoryEntry,
   clearAnalysisHistory,
   getAnalysisHistory,
-  removeAnalysisFromHistory,
   subscribeToAnalysisHistory,
 } from '@/lib/analysisSession';
 
@@ -52,13 +51,6 @@ export default function HistoryPage() {
     const unsubscribe = subscribeToAnalysisHistory(setHistory);
     return () => unsubscribe();
   }, []);
-
-  const handleRemove = (analysisId: string) => {
-    if (!confirm('Remove this entry from history?')) return;
-    const next = removeAnalysisFromHistory(analysisId);
-    setHistory(next);
-    toast.success('Removed from history');
-  };
 
   const handleClear = () => {
     if (history.length === 0) return;
@@ -116,17 +108,6 @@ export default function HistoryPage() {
                         {formatTimestamp(entry.createdAt)}
                       </p>
                     </div>
-                  </div>
-                  <div className="sm:flex-shrink-0">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleRemove(entry.analysisId)}
-                      className="inline-flex items-center gap-1"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      Remove
-                    </Button>
                   </div>
                 </div>
               </Card>
