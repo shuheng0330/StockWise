@@ -106,8 +106,15 @@ jobs:
           STOCKWISE_SUPABASE_ENABLED: "false"
         run: |
           uvicorn "stockwise_api.api.app:create_app" --factory --app-dir src --host 0.0.0.0 --port 8000 &
-          sleep 3
-          curl -f http://localhost:8000/health
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null; then
+              echo "Backend ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend failed to start within 30s"
+          exit 1
 
       - name: Set up Node 20
         uses: actions/setup-node@v4

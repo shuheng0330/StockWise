@@ -40,9 +40,15 @@ export interface KPISummary {
 }
 
 export interface DatasetSummary {
-  total_items: number;
-  total_inventory_value: number;
-  avg_days_of_cover: number;
+  row_count: number;
+  item_count: number;
+  date_range: {
+    start: string;
+    end: string;
+  };
+  total_items?: number;
+  total_inventory_value?: number;
+  avg_days_of_cover?: number;
 }
 
 export interface AnalysisResponse {
@@ -50,6 +56,33 @@ export interface AnalysisResponse {
   dataset_summary: DatasetSummary;
   kpi_summary: KPISummary;
   items: InventoryItem[];
+}
+
+export interface RecordsResponse {
+  analysis_id: string;
+  dataset_summary: DatasetSummary;
+  kpi_summary: KPISummary;
+  items: InventoryItem[];
+  source_observations: SourceObservation[];
+}
+
+export interface SourceObservation {
+  date?: string | null;
+  item_id?: number | null;
+  item_name: string;
+  current_stock: number;
+  unit: string;
+  usage_value: number;
+  usage_period: UsagePeriod;
+  lead_time_days: number;
+  price_per_unit: number;
+  category?: string | null;
+  subcategory?: string | null;
+  supplier_name?: string | null;
+  perishability_level?: PerishabilityLevel | null;
+  manual_reorder_level?: number | null;
+  seasonal_factor: number;
+  recent_waste_percentage?: number | null;
 }
 
 export interface DecisionBriefItem {
@@ -94,6 +127,18 @@ export interface SimulationResponse {
   reorder_urgency_score: number;
   waste_risk_score: number;
   recommended_action: RecommendedAction;
+}
+
+export interface TradeoffVerdictRequest {
+  simulated_order_qty: number;
+}
+
+export interface TradeoffVerdictResponse {
+  source: 'mock' | 'live' | 'fallback';
+  verdict: 'Worth it' | 'Too much stock' | 'Cash-heavy but safe' | 'Try smaller quantity' | 'Good emergency reorder';
+  reason: string;
+  confidence_note: string;
+  safety_status: 'validated' | 'retried' | 'fallback_used';
 }
 
 export interface ExplanationRequest {

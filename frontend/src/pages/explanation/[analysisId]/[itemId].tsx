@@ -5,7 +5,7 @@ import { apiClient } from '@/services/api';
 import { ExplanationResponse } from '@/types';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import toast from 'react-hot-toast';
 
 export default function ExplanationPage() {
@@ -16,9 +16,19 @@ export default function ExplanationPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRetrying, setIsRetrying] = useState(false);
   const [error, setError] = useState<string>('');
+  const prevParamsRef = useRef<{ analysisId?: string | string[]; itemId?: string | string[] }>({});
 
   useEffect(() => {
     if (!analysisId || !itemId) return;
+
+    // Only fetch if parameters have actually changed
+    const paramsChanged =
+      prevParamsRef.current.analysisId !== analysisId ||
+      prevParamsRef.current.itemId !== itemId;
+
+    if (!paramsChanged) return;
+
+    prevParamsRef.current = { analysisId, itemId };
     fetchExplanation();
   }, [analysisId, itemId, simulated]);
 

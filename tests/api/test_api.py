@@ -63,6 +63,18 @@ def test_cors_allows_deployed_frontend_origin_from_env(monkeypatch):
     assert response.headers["access-control-allow-origin"] == "https://stockwise.vercel.app"
 
 
+def test_health_reports_history_snapshot_write_mode():
+    client = TestClient(create_app(supabase_store=object()))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["supabase_store_ready"] is True
+    assert body["history_snapshot_table"] == "analysis_source_observations"
+    assert body["snapshot_write_mode"] == "required"
+
+
 def test_upload_endpoint_accepts_legacy_dataset_csv_headers():
     client = TestClient(create_app())
     response = client.post(
@@ -183,17 +195,22 @@ def test_upload_endpoint_returns_supabase_analysis_snapshot_id_when_available():
     assert paneer["_latest_record_id"] == "record-paneer"
 
 
-def test_upload_endpoint_does_not_wait_forever_for_slow_supabase_persistence(monkeypatch):
+def test_upload_endpoint_persists_snapshot_when_observation_persistence_times_out(monkeypatch):
     class SlowSupabaseStore:
+        def __init__(self):
+            self.snapshot_kwargs = None
+
         def persist_observations(self, observations, **kwargs):
             time.sleep(1)
             return {"import_batch_id": "slow-import", "successful_rows": len(observations), "failed_rows": 0}
 
         def create_analysis_snapshot(self, **kwargs):
-            pytest.fail("snapshot persistence should be skipped after observation persistence times out")
+            self.snapshot_kwargs = kwargs
+            return "33333333-3333-3333-3333-333333333333"
 
     monkeypatch.setenv("STOCKWISE_SUPABASE_OPERATION_TIMEOUT_SECONDS", "0.01")
-    client = TestClient(create_app(supabase_store=SlowSupabaseStore()))
+    supabase_store = SlowSupabaseStore()
+    client = TestClient(create_app(supabase_store=supabase_store))
 
     start = time.perf_counter()
     response = client.post(
@@ -205,8 +222,32 @@ def test_upload_endpoint_does_not_wait_forever_for_slow_supabase_persistence(mon
     assert response.status_code == 200
     assert elapsed < 0.5
     body = response.json()
-    assert body["analysis_id"] != "slow-import"
+    assert body["analysis_id"] == "33333333-3333-3333-3333-333333333333"
     assert len(body["items"]) == 2
+    assert supabase_store.snapshot_kwargs["import_batch_id"] is None
+    assert len(supabase_store.snapshot_kwargs["source_observations"]) == 2
+
+
+def test_upload_endpoint_waits_for_analysis_snapshot_even_when_supabase_timeout_is_short(monkeypatch):
+    class SlowSnapshotSupabaseStore:
+        def persist_observations(self, observations, **kwargs):
+            return {"import_batch_id": "import-batch-1", "successful_rows": len(observations), "failed_rows": 0}
+
+        def create_analysis_snapshot(self, **kwargs):
+            time.sleep(0.05)
+            return "44444444-4444-4444-4444-444444444444"
+
+    monkeypatch.setenv("STOCKWISE_SUPABASE_OPERATION_TIMEOUT_SECONDS", "0.01")
+    client = TestClient(create_app(supabase_store=SlowSnapshotSupabaseStore()))
+
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_id"] == "44444444-4444-4444-4444-444444444444"
 
 
 def test_simulation_endpoint_returns_updated_scenario_metrics():
@@ -226,6 +267,97 @@ def test_simulation_endpoint_returns_updated_scenario_metrics():
     assert body["item_id"] == 1
     assert body["simulated_order_qty"] == 3.0
     assert body["simulated_cash_outlay"] == 1350.0
+
+
+def test_tradeoff_verdict_endpoint_returns_structured_mock_response():
+    class VerdictProvider(MockZAIProvider):
+        def generate_tradeoff_verdict(self, context):
+            return json.dumps(
+                {
+                    "verdict": "Cash-heavy but safe",
+                    "reason": "The simulation lowers shortage pressure but commits cash today.",
+                    "confidence_note": "Based on server-computed simulation metrics.",
+                }
+            )
+
+    client = TestClient(create_app(glm_provider=VerdictProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1/tradeoff-verdict",
+        json={"simulated_order_qty": 3.0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "mock"
+    assert body["verdict"] == "Cash-heavy but safe"
+    assert body["safety_status"] == "validated"
+
+
+def test_tradeoff_verdict_endpoint_falls_back_on_malformed_provider_response():
+    class BrokenVerdictProvider(MockZAIProvider):
+        def generate_tradeoff_verdict(self, context):
+            return "{not-json"
+
+    client = TestClient(create_app(glm_provider=BrokenVerdictProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1/tradeoff-verdict",
+        json={"simulated_order_qty": 3.0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "fallback"
+    assert body["verdict"] in {
+        "Worth it",
+        "Too much stock",
+        "Cash-heavy but safe",
+        "Try smaller quantity",
+        "Good emergency reorder",
+    }
+
+
+def test_tradeoff_verdict_endpoint_falls_back_when_live_verdict_conflicts_with_simulation():
+    class ConflictingVerdictProvider(MockZAIProvider):
+        def generate_tradeoff_verdict(self, context):
+            return json.dumps(
+                {
+                    "verdict": "Try smaller quantity",
+                    "reason": "Ordering this amount extends coverage beyond the best level.",
+                    "confidence_note": "Based on simulated metrics.",
+                }
+            )
+
+    low_stock_csv = (
+        "item_name,current_stock,unit,usage_value,usage_period,lead_time_days,price_per_unit,"
+        "category,supplier_name,perishability_level,manual_reorder_level,seasonal_factor,recent_waste_percentage\n"
+        "Milk,1,liter,10,daily,3,5,Dairy,Supplier A,low,30,1.0,1.0\n"
+    )
+    client = TestClient(create_app(glm_provider=ConflictingVerdictProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("low_stock.csv", low_stock_csv, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1/tradeoff-verdict",
+        json={"simulated_order_qty": 2.0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "fallback"
+    assert body["verdict"] == "Good emergency reorder"
+    assert "still needs restocking" in body["reason"]
 
 
 def test_explanation_endpoint_returns_mock_source_by_default():
@@ -1295,6 +1427,661 @@ def test_upload_endpoint_requires_authenticated_user():
     )
 
     assert response.status_code == 401
+
+
+def test_repeated_csv_uploads_without_supabase_append_to_session_history():
+    next_month_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-07-10,1,Paneer,Dairy,Cheese,kg,4,8,5,3,450,Supplier A,1.1,4.0\n"
+        "2025-07-10,2,Rice,Grain,Staple,kg,18,6,3,2,70,Supplier B,1.0,1.5\n"
+    ).encode()
+    client = TestClient(create_app())
+
+    first_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("june_inventory.csv", LEGACY_CSV, "text/csv")},
+    )
+    second_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("july_inventory.csv", next_month_csv, "text/csv")},
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    body = second_response.json()
+    assert body["dataset_summary"]["row_count"] == 4
+    assert body["dataset_summary"]["item_count"] == 2
+    assert body["dataset_summary"]["date_range"] == {
+        "start": "2025-06-10",
+        "end": "2025-07-10",
+    }
+    paneer = next(item for item in body["items"] if item["item_id"] == 1)
+    assert paneer["date"] == "2025-07-10"
+    assert paneer["current_stock"] == 4.0
+    assert paneer["avg_usage_7d"] == 3.5
+
+
+def test_csv_upload_keeps_previous_snapshot_history_when_supabase_history_is_partial():
+    next_month_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-07-10,1,Paneer,Dairy,Cheese,kg,4,8,5,3,450,Supplier A,1.1,4.0\n"
+        "2025-07-10,2,Rice,Grain,Staple,kg,18,6,3,2,70,Supplier B,1.0,1.5\n"
+    ).encode()
+
+    class PartialHistorySupabaseStore:
+        def __init__(self):
+            self.persisted = []
+            self.new_only = False
+            self.snapshot_count = 0
+
+        def persist_observations(self, observations, **kwargs):
+            self.persisted.extend(dict(row) for row in observations)
+            return {
+                "import_batch_id": f"batch-{self.snapshot_count + 1}",
+                "successful_rows": len(observations),
+                "failed_rows": 0,
+            }
+
+        def list_user_observations(self, user_id):
+            if self.new_only:
+                return [row for row in self.persisted if row.get("date") == "2025-07-10"]
+            return list(self.persisted)
+
+        def create_analysis_snapshot(self, **kwargs):
+            self.snapshot_count += 1
+            return f"snapshot-{self.snapshot_count}"
+
+    supabase_store = PartialHistorySupabaseStore()
+    app = create_app(supabase_store=supabase_store, auth_user_resolver=_test_user_resolver)
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("june_inventory.csv", LEGACY_CSV, "text/csv")},
+        headers=_auth_headers(),
+    )
+    supabase_store.new_only = True
+    app.state.observation_history = {}
+    second_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("july_inventory.csv", next_month_csv, "text/csv")},
+        headers=_auth_headers(),
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    body = second_response.json()
+    assert body["dataset_summary"]["row_count"] == 4
+    assert body["dataset_summary"]["date_range"] == {
+        "start": "2025-06-10",
+        "end": "2025-07-10",
+    }
+
+
+def test_records_endpoint_includes_all_uploaded_source_observations():
+    next_month_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-07-10,1,Paneer,Dairy,Cheese,kg,4,8,5,3,450,Supplier A,1.1,4.0\n"
+        "2025-07-10,2,Rice,Grain,Staple,kg,18,6,3,2,70,Supplier B,1.0,1.5\n"
+    ).encode()
+    client = TestClient(create_app())
+
+    client.post(
+        "/api/v1/analyses",
+        files={"file": ("june_inventory.csv", LEGACY_CSV, "text/csv")},
+    )
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("july_inventory.csv", next_month_csv, "text/csv")},
+    ).json()
+
+    response = client.get(f"/api/v1/analyses/{analysis['analysis_id']}/records")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 2
+    assert len(body["source_observations"]) == 4
+    assert [row["date"] for row in body["source_observations"]] == [
+        "2025-06-10",
+        "2025-06-11",
+        "2025-07-10",
+        "2025-07-10",
+    ]
+    assert [row["current_stock"] for row in body["source_observations"]] == [
+        12.0,
+        20.0,
+        4.0,
+        18.0,
+    ]
+
+
+def test_csv_upload_merges_arbitrary_date_ranges_and_sorts_by_observation_date():
+    october_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-10-01,1,Paneer,Dairy,Cheese,kg,9,8,4,3,450,Supplier A,1.1,4.0\n"
+        "2025-10-31,1,Paneer,Dairy,Cheese,kg,3,8,7,3,450,Supplier A,1.1,4.0\n"
+        "2025-10-31,2,Rice,Grain,Staple,kg,18,6,3,2,70,Supplier B,1.0,1.5\n"
+    ).encode()
+    june_to_september_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-06-10,1,Paneer,Dairy,Cheese,kg,12,8,2,3,450,Supplier A,1.1,4.0\n"
+        "2025-09-17,1,Paneer,Dairy,Cheese,kg,7,8,5,3,450,Supplier A,1.1,4.0\n"
+        "2025-09-17,2,Rice,Grain,Staple,kg,20,6,2,2,70,Supplier B,1.0,1.5\n"
+    ).encode()
+    client = TestClient(create_app())
+
+    october_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("october_inventory.csv", october_csv, "text/csv")},
+    )
+    combined_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("june_to_september_inventory.csv", june_to_september_csv, "text/csv")},
+    )
+
+    assert october_response.status_code == 200
+    assert combined_response.status_code == 200
+    body = combined_response.json()
+    assert body["dataset_summary"]["row_count"] == 6
+    assert body["dataset_summary"]["item_count"] == 2
+    assert body["dataset_summary"]["date_range"] == {
+        "start": "2025-06-10",
+        "end": "2025-10-31",
+    }
+    paneer = next(item for item in body["items"] if item["item_id"] == 1)
+    assert paneer["date"] == "2025-10-31"
+    assert paneer["current_stock"] == 3.0
+    assert paneer["avg_usage_7d"] == 4.5
+    assert paneer["trend_direction"] == "up"
+
+
+def test_reuploading_same_csv_does_not_duplicate_identical_source_rows():
+    client = TestClient(create_app())
+
+    first_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("june_inventory.csv", LEGACY_CSV, "text/csv")},
+    )
+    second_response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("june_inventory_again.csv", LEGACY_CSV, "text/csv")},
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    body = second_response.json()
+    assert body["dataset_summary"]["row_count"] == 2
+    assert body["dataset_summary"]["item_count"] == 2
+    assert body["dataset_summary"]["date_range"] == {
+        "start": "2025-06-10",
+        "end": "2025-06-11",
+    }
+    records = client.get(f"/api/v1/analyses/{body['analysis_id']}/records").json()
+    assert len(records["source_observations"]) == 2
+
+
+def test_csv_upload_uses_previous_item_snapshot_as_history_fallback_when_raw_rows_are_missing():
+    october_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-10-31,1,Paneer,Dairy,Cheese,kg,3,8,7,3,450,Supplier A,1.1,4.0\n"
+        "2025-10-31,2,Rice,Grain,Staple,kg,18,6,3,2,70,Supplier B,1.0,1.5\n"
+    ).encode()
+
+    previous_item = {
+        "item_id": 1,
+        "date": "2025-09-17",
+        "item_name": "Paneer",
+        "category": "Dairy",
+        "subcategory": "Cheese",
+        "unit": "kg",
+        "supplier_name": "Supplier A",
+        "current_stock": 7.0,
+        "reorder_level": 8.0,
+        "daily_usage": 5.0,
+        "lead_time": 3,
+        "price_per_unit": 450.0,
+        "seasonal_factor": 1.1,
+        "waste_percentage": 4.0,
+        "avg_usage_7d": 3.0,
+        "trend_direction": "up",
+        "days_of_cover": 1.4,
+        "inventory_value": 3150.0,
+        "estimated_waste_cost": 126.0,
+        "lead_time_demand": 16.5,
+        "stock_gap_to_lead_demand": -9.5,
+        "reorder_urgency_score": 70,
+        "waste_risk_score": 20,
+        "recommended_action": "RESTOCK_NOW",
+    }
+
+    class SnapshotOnlyHistoryStore:
+        def __init__(self):
+            self.snapshot_calls = []
+
+        def get_latest_analysis_id(self, user_id):
+            return "previous-analysis"
+
+        def get(self, analysis_id, user_id=None):
+            if analysis_id != "previous-analysis":
+                raise KeyError(analysis_id)
+            return AnalysisRecord(
+                dataset_summary={
+                    "row_count": 1000,
+                    "item_count": 10,
+                    "date_range": {"start": "2025-06-10", "end": "2025-09-17"},
+                },
+                kpi_summary={
+                    "item_count": 1,
+                    "restock_now_count": 1,
+                    "buy_less_count": 0,
+                    "high_waste_risk_count": 0,
+                    "inventory_value_at_risk": 0.0,
+                    "top_urgent_items": ["Paneer"],
+                    "top_waste_cost_items": ["Paneer"],
+                },
+                items=[previous_item],
+                source_observations=[],
+            )
+
+        def persist_observations(self, observations, **kwargs):
+            return {
+                "import_batch_id": "october-batch",
+                "successful_rows": len(observations),
+                "failed_rows": 0,
+            }
+
+        def list_user_observations(self, user_id):
+            return []
+
+        def create_analysis_snapshot(self, **kwargs):
+            self.snapshot_calls.append(kwargs)
+            return "new-analysis"
+
+    app = create_app(
+        supabase_store=SnapshotOnlyHistoryStore(),
+        auth_user_resolver=_test_user_resolver,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("october_inventory.csv", october_csv, "text/csv")},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dataset_summary"]["row_count"] == 3
+    assert body["dataset_summary"]["item_count"] == 2
+    assert body["dataset_summary"]["date_range"] == {
+        "start": "2025-09-17",
+        "end": "2025-10-31",
+    }
+    paneer = next(item for item in body["items"] if item["item_id"] == 1)
+    assert paneer["date"] == "2025-10-31"
+    assert paneer["avg_usage_7d"] == 6.0
+    assert paneer["trend_direction"] == "up"
+
+
+def test_csv_upload_uses_explicit_base_analysis_instead_of_guessing_latest_snapshot():
+    october_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-10-31,1,Paneer,Dairy,Cheese,kg,3,8,7,3,450,Supplier A,1.1,4.0\n"
+    ).encode()
+
+    historical_record = AnalysisRecord(
+        dataset_summary={
+            "row_count": 1000,
+            "item_count": 10,
+            "date_range": {"start": "2025-06-10", "end": "2025-09-17"},
+        },
+        kpi_summary={
+            "item_count": 1,
+            "restock_now_count": 1,
+            "buy_less_count": 0,
+            "high_waste_risk_count": 0,
+            "inventory_value_at_risk": 0.0,
+            "top_urgent_items": ["Paneer"],
+            "top_waste_cost_items": ["Paneer"],
+        },
+        items=[],
+        source_observations=[
+            {
+                "date": "2025-06-10",
+                "item_id": 1,
+                "item_name": "Paneer",
+                "current_stock": 12.0,
+                "unit": "kg",
+                "usage_value": 2.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+            {
+                "date": "2025-09-17",
+                "item_id": 1,
+                "item_name": "Paneer",
+                "current_stock": 7.0,
+                "unit": "kg",
+                "usage_value": 5.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+        ],
+    )
+    latest_record = AnalysisRecord(
+        dataset_summary={
+            "row_count": 310,
+            "item_count": 10,
+            "date_range": {"start": "2025-10-01", "end": "2025-10-31"},
+        },
+        kpi_summary=historical_record.kpi_summary,
+        items=[],
+        source_observations=[],
+    )
+
+    class ExplicitBaseStore:
+        def get_latest_analysis_id(self, user_id):
+            return "october-only"
+
+        def get(self, analysis_id, user_id=None):
+            if analysis_id == "june-september":
+                return historical_record
+            if analysis_id == "october-only":
+                return latest_record
+            raise KeyError(analysis_id)
+
+        def persist_observations(self, observations, **kwargs):
+            return {
+                "import_batch_id": "october-batch",
+                "successful_rows": len(observations),
+                "failed_rows": 0,
+            }
+
+        def list_user_observations(self, user_id):
+            return []
+
+        def create_analysis_snapshot(self, **kwargs):
+            return "merged-analysis"
+
+    client = TestClient(
+        create_app(supabase_store=ExplicitBaseStore(), auth_user_resolver=_test_user_resolver)
+    )
+
+    response = client.post(
+        "/api/v1/analyses",
+        data={"base_analysis_id": "june-september"},
+        files={"file": ("october_inventory.csv", october_csv, "text/csv")},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dataset_summary"]["row_count"] == 3
+    assert body["dataset_summary"]["date_range"] == {
+        "start": "2025-06-10",
+        "end": "2025-10-31",
+    }
+    paneer = body["items"][0]
+    assert paneer["date"] == "2025-10-31"
+    assert paneer["avg_usage_7d"] == pytest.approx(14 / 3)
+
+
+def test_loaded_supabase_analysis_keeps_source_observations_for_followup_upload():
+    historical_record = AnalysisRecord(
+        dataset_summary={
+            "row_count": 1,
+            "item_count": 1,
+            "date_range": {"start": "2025-06-10", "end": "2025-06-10"},
+        },
+        kpi_summary={
+            "item_count": 1,
+            "restock_now_count": 0,
+            "buy_less_count": 0,
+            "high_waste_risk_count": 0,
+            "inventory_value_at_risk": 0.0,
+            "top_urgent_items": [],
+            "top_waste_cost_items": [],
+        },
+        items=[],
+        source_observations=[
+            {
+                "date": "2025-06-10",
+                "item_id": 1,
+                "item_name": "Paneer",
+                "current_stock": 12.0,
+                "unit": "kg",
+                "usage_value": 2.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            }
+        ],
+    )
+
+    class SupabaseHistoryStore:
+        def __init__(self):
+            self.snapshot_kwargs = None
+
+        def get(self, analysis_id, user_id=None):
+            if analysis_id != "historical-analysis":
+                raise KeyError(analysis_id)
+            return historical_record
+
+        def persist_observations(self, observations, **kwargs):
+            return {"import_batch_id": "october-batch", "successful_rows": len(observations), "failed_rows": 0}
+
+        def list_user_observations(self, user_id):
+            return []
+
+        def create_analysis_snapshot(self, **kwargs):
+            self.snapshot_kwargs = kwargs
+            return "merged-analysis"
+
+    october_csv = (
+        "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+        "2025-10-31,1,Paneer,Dairy,Cheese,kg,3,8,7,3,450,Supplier A,1.1,4.0\n"
+    ).encode()
+    supabase_store = SupabaseHistoryStore()
+    app = create_app(supabase_store=supabase_store, auth_user_resolver=_test_user_resolver)
+    client = TestClient(app)
+
+    loaded = client.get(
+        "/api/v1/analyses/historical-analysis",
+        headers=_auth_headers(),
+    )
+    assert loaded.status_code == 200
+
+    response = client.post(
+        "/api/v1/analyses",
+        data={"base_analysis_id": "historical-analysis"},
+        files={"file": ("october_inventory.csv", october_csv, "text/csv")},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dataset_summary"]["row_count"] == 2
+    assert body["dataset_summary"]["date_range"] == {
+        "start": "2025-06-10",
+        "end": "2025-10-31",
+    }
+    assert len(supabase_store.snapshot_kwargs["source_observations"]) == 2
+
+
+def test_decision_brief_context_includes_summarized_history_not_raw_rows():
+    class CapturingDecisionProvider(MockZAIProvider):
+        def __init__(self):
+            self.context = None
+
+        def generate_decision_brief(self, context):
+            self.context = context
+            return super().generate_decision_brief(context)
+
+    provider = CapturingDecisionProvider()
+    client = TestClient(create_app(glm_provider=provider))
+    client.post(
+        "/api/v1/analyses",
+        files={"file": ("june_inventory.csv", LEGACY_CSV, "text/csv")},
+    )
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={
+            "file": (
+                "october_inventory.csv",
+                (
+                    "Date,Item_ID,Item_Name,Category,Subcategory,Unit,Current_Stock,Reorder_Level,Daily_Usage,Lead_Time,Price_per_Unit,Supplier_Name,Seasonal_Factor,Waste_Percentage\n"
+                    "2025-10-31,1,Paneer,Dairy,Cheese,kg,3,8,7,3,450,Supplier A,1.1,4.0\n"
+                ).encode(),
+                "text/csv",
+            )
+        },
+    ).json()
+
+    response = client.get(f"/api/v1/analyses/{analysis['analysis_id']}/decision-brief")
+
+    assert response.status_code == 200
+    history_summary = provider.context["analysis"]["history_summary"]
+    assert history_summary == {
+        "date_range": {"start": "2025-06-10", "end": "2025-10-31"},
+        "source_observation_count": 3,
+        "current_item_count": 2,
+        "latest_observation_date": "2025-10-31",
+    }
+    paneer_context = next(
+        item for item in provider.context["analysis"]["items"] if item["item_name"] == "Paneer"
+    )
+    assert paneer_context["history"] == {
+        "observation_count": 2,
+        "latest_observation_date": "2025-10-31",
+        "avg_usage_7d": 4.5,
+        "trend_direction": "up",
+    }
+    assert "source_observations" not in provider.context["analysis"]
+
+
+def test_records_endpoint_backfills_source_observations_when_memory_snapshot_is_stale():
+    class ReadOnlySupabaseStore:
+        def get(self, analysis_id, user_id=None):
+            assert analysis_id == "stale-analysis-id"
+            assert user_id == TEST_USER_ID
+            return AnalysisRecord(
+                dataset_summary={
+                    "row_count": 2,
+                    "item_count": 1,
+                    "date_range": {"start": "2025-06-10", "end": "2025-07-10"},
+                },
+                kpi_summary={
+                    "item_count": 1,
+                    "restock_now_count": 1,
+                    "buy_less_count": 0,
+                    "high_waste_risk_count": 0,
+                    "inventory_value_at_risk": 0.0,
+                    "top_urgent_items": ["Paneer"],
+                    "top_waste_cost_items": ["Paneer"],
+                },
+                items=[
+                    {
+                        "item_id": 1,
+                        "date": "2025-07-10",
+                        "item_name": "Paneer",
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "unit": "kg",
+                        "supplier_name": "Supplier A",
+                        "current_stock": 4.0,
+                        "reorder_level": 8.0,
+                        "daily_usage": 5.0,
+                        "lead_time": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "waste_percentage": 4.0,
+                        "avg_usage_7d": 3.5,
+                        "trend_direction": "up",
+                        "days_of_cover": 0.8,
+                        "inventory_value": 1800.0,
+                        "estimated_waste_cost": 72.0,
+                        "lead_time_demand": 16.5,
+                        "stock_gap_to_lead_demand": -12.5,
+                        "reorder_urgency_score": 75,
+                        "waste_risk_score": 21,
+                        "recommended_action": "RESTOCK_NOW",
+                    }
+                ],
+                source_observations=[
+                    {
+                        "date": "2025-06-10",
+                        "item_id": 1,
+                        "item_name": "Paneer",
+                        "current_stock": 12.0,
+                        "unit": "kg",
+                        "usage_value": 2.0,
+                        "usage_period": "daily",
+                        "lead_time_days": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "supplier_name": "Supplier A",
+                        "recent_waste_percentage": 4.0,
+                    },
+                    {
+                        "date": "2025-07-10",
+                        "item_id": 1,
+                        "item_name": "Paneer",
+                        "current_stock": 4.0,
+                        "unit": "kg",
+                        "usage_value": 5.0,
+                        "usage_period": "daily",
+                        "lead_time_days": 3,
+                        "price_per_unit": 450.0,
+                        "seasonal_factor": 1.1,
+                        "category": "Dairy",
+                        "subcategory": "Cheese",
+                        "supplier_name": "Supplier A",
+                        "recent_waste_percentage": 4.0,
+                    },
+                ],
+            )
+
+    app = create_app(supabase_store=ReadOnlySupabaseStore(), auth_user_resolver=_test_user_resolver)
+    stale_snapshot = ReadOnlySupabaseStore().get("stale-analysis-id", TEST_USER_ID)
+    app.state.store.create(
+        analysis_id="stale-analysis-id",
+        owner_id=TEST_USER_ID,
+        dataset_summary=stale_snapshot.dataset_summary,
+        kpi_summary=stale_snapshot.kpi_summary,
+        items=stale_snapshot.items,
+        source_observations=[],
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/v1/analyses/stale-analysis-id/records",
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 1
+    assert len(body["source_observations"]) == 2
+    assert body["source_observations"][0]["date"] == "2025-06-10"
 
 
 def test_manual_analysis_after_csv_returns_merged_user_history_snapshot():

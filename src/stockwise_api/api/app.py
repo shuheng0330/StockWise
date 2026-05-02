@@ -1,12 +1,13 @@
 from dataclasses import is_dataclass
 from datetime import date, datetime, timezone
 import json
+import logging
 from typing import Callable
 import os
 from queue import Empty, Queue
 from threading import Thread
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from supabase import Client, ClientOptions, create_client
@@ -29,6 +30,8 @@ from stockwise_api.schemas import (
     RecordItem,
     SimulationRequest,
     SimulationResponse,
+    TradeoffVerdictRequest,
+    TradeoffVerdictResponse,
     RecordUpdateRequest,
     RecordsResponse,
 )
@@ -36,6 +39,7 @@ from stockwise_api.services.glm import (
     build_decision_brief_context,
     build_explanation_context,
     build_inventory_chat_context,
+    build_tradeoff_verdict_context,
     provider_from_env,
 )
 from stockwise_api.services.manual_input import (
@@ -51,9 +55,12 @@ from stockwise_api.services.parsing import (
     build_fallback_chat_response,
     ExplanationValidationError,
     build_fallback_explanation,
+    build_fallback_tradeoff_verdict,
     parse_chat_response,
     parse_decision_brief_response,
     parse_explanation_response,
+    parse_tradeoff_verdict_response,
+    TradeoffVerdictValidationError,
 )
 from stockwise_api.services.recommendations import (
     build_kpi_summary,
@@ -65,6 +72,9 @@ from stockwise_api.services.validation import (
     validate_inventory_csv,
 )
 from stockwise_api.store import InMemoryAnalysisStore, SupabaseAnalysisStore
+
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_internal_fields(payload: dict) -> dict:
@@ -115,13 +125,30 @@ def _ai_explanation_cache_key(
     )
 
 
+def _ai_tradeoff_verdict_cache_key(
+    *,
+    analysis_id: str,
+    owner_id: str | None,
+    item_id: int,
+    simulated_order_qty: float,
+) -> str:
+    return _stable_json(
+        {
+            "owner": owner_id or "anonymous",
+            "analysis_id": analysis_id,
+            "item_id": item_id,
+            "simulated_order_qty": simulated_order_qty,
+        }
+    )
+
+
 def _clear_ai_cache_for_analysis(app: FastAPI, analysis_id: str, owner_id: str | None = None) -> None:
     cache = getattr(app.state, "ai_response_cache", None)
     if not cache:
         return
     owner_prefix = f"{owner_id or 'anonymous'}:{analysis_id}"
     cache.get("decision_briefs", {}).pop(owner_prefix, None)
-    for bucket_name in ("chats", "explanations"):
+    for bucket_name in ("chats", "explanations", "tradeoff_verdicts"):
         bucket = cache.get(bucket_name, {})
         for key in list(bucket.keys()):
             try:
@@ -168,7 +195,43 @@ def _records_payload_from_record(analysis_id: str, record) -> dict:
         "dataset_summary": record.dataset_summary,
         "kpi_summary": record.kpi_summary,
         "items": [item_to_record_view(item) for item in record.items],
+        "source_observations": [
+            _strip_internal_fields(observation)
+            for observation in getattr(record, "source_observations", [])
+        ],
     }
+
+
+def _record_needs_source_observation_backfill(record) -> bool:
+    source_observations = getattr(record, "source_observations", []) or []
+    row_count = int(record.dataset_summary.get("row_count", len(record.items)))
+    return not source_observations and row_count > len(record.items)
+
+
+def _backfill_source_observations_from_supabase(
+    app: FastAPI,
+    analysis_id: str,
+    record,
+    user_id: str | None,
+):
+    if not _record_needs_source_observation_backfill(record):
+        return record
+
+    supabase_store = app.state.supabase_store
+    if supabase_store is None or not hasattr(supabase_store, "get"):
+        return record
+
+    try:
+        supabase_record = _call_store_get(supabase_store, analysis_id, user_id)
+    except Exception:
+        return record
+
+    source_observations = getattr(supabase_record, "source_observations", []) or []
+    if not source_observations:
+        return record
+
+    record.source_observations = source_observations
+    return record
 
 
 def _call_store_get(store, analysis_id: str, user_id: str | None):
@@ -219,6 +282,7 @@ def _load_analysis_record(app: FastAPI, analysis_id: str, user_id: str | None = 
                 items=analysis.items,
                 analysis_id=analysis_id,
                 owner_id=user_id,
+                source_observations=getattr(analysis, "source_observations", []),
             )
             return analysis
         except Exception:
@@ -334,6 +398,7 @@ def _save_analysis(
     source_type: str | None = None,
     import_batch_id: str | None = None,
     owner_id: str | None = None,
+    source_observations: list[dict] | None = None,
 ) -> str:
     ranked_items = build_ranked_analysis(items)
     kpis = build_kpi_summary(ranked_items)
@@ -341,25 +406,51 @@ def _save_analysis(
         snapshot_id = None
         if supabase_store is not None and hasattr(supabase_store, "create_analysis_snapshot"):
             try:
-                snapshot_id = _run_optional_supabase_operation(
-                    "create-analysis-snapshot",
-                    lambda: supabase_store.create_analysis_snapshot(
-                        dataset_summary=dataset_summary,
-                        ranked_items=ranked_items,
-                        source_type=source_type or "manual",
-                        import_batch_id=import_batch_id,
-                        created_by=owner_id,
-                    ),
-                    lambda: None,
+                logger.warning(
+                    "stockwise.analysis_snapshot.start source_type=%s owner_id=%s import_batch_id=%s row_count=%s item_count=%s source_observation_count=%s",
+                    source_type or "manual",
+                    owner_id,
+                    import_batch_id,
+                    dataset_summary.get("row_count"),
+                    dataset_summary.get("item_count"),
+                    len(source_observations or []),
+                )
+                snapshot_id = supabase_store.create_analysis_snapshot(
+                    dataset_summary=dataset_summary,
+                    ranked_items=ranked_items,
+                    source_type=source_type or "manual",
+                    import_batch_id=import_batch_id,
+                    created_by=owner_id,
+                    source_observations=source_observations or [],
+                )
+                logger.warning(
+                    "stockwise.analysis_snapshot.success analysis_id=%s source_observation_count=%s",
+                    snapshot_id,
+                    len(source_observations or []),
                 )
             except Exception as exc:
-                print(f"Failed to persist analysis snapshot to Supabase: {type(exc).__name__}: {exc}")
+                logger.exception(
+                    "stockwise.analysis_snapshot.failure source_type=%s owner_id=%s import_batch_id=%s row_count=%s item_count=%s source_observation_count=%s",
+                    source_type or "manual",
+                    owner_id,
+                    import_batch_id,
+                    dataset_summary.get("row_count"),
+                    dataset_summary.get("item_count"),
+                    len(source_observations or []),
+                )
+        else:
+            logger.warning(
+                "stockwise.analysis_snapshot.skipped supabase_store_ready=%s has_create_analysis_snapshot=%s",
+                supabase_store is not None,
+                hasattr(supabase_store, "create_analysis_snapshot"),
+            )
         analysis_id = store.create(
             dataset_summary=dataset_summary,
             kpi_summary=kpis,
             items=ranked_items,
             analysis_id=snapshot_id,
             owner_id=owner_id,
+            source_observations=source_observations,
         )
     else:
         store.update(
@@ -368,6 +459,7 @@ def _save_analysis(
             kpi_summary=kpis,
             items=ranked_items,
             owner_id=owner_id,
+            source_observations=source_observations,
         )
     return analysis_id
 
@@ -563,6 +655,140 @@ def _latest_records_by_history_identity_from_observations(observations: list[dic
     return latest_records
 
 
+def _session_history_key(user_id: str | None) -> str:
+    return user_id or "anonymous"
+
+
+def _append_session_observation_history(
+    app: FastAPI,
+    user_id: str | None,
+    observations: list[dict],
+) -> list[dict]:
+    history_by_owner = app.state.observation_history
+    history = history_by_owner.setdefault(_session_history_key(user_id), [])
+    history.extend(dict(observation) for observation in observations)
+    return [dict(observation) for observation in history]
+
+
+def _item_snapshot_to_source_observation(item: dict) -> dict:
+    return {
+        "date": item.get("date") or date.today().isoformat(),
+        "item_id": item.get("item_id"),
+        "item_name": item["item_name"],
+        "current_stock": item["current_stock"],
+        "unit": item["unit"],
+        "usage_value": item.get("usage_value", item.get("daily_usage")),
+        "usage_period": item.get("usage_period", "daily"),
+        "lead_time_days": item.get("lead_time_days", item.get("lead_time")),
+        "price_per_unit": item["price_per_unit"],
+        "seasonal_factor": item["seasonal_factor"],
+        "category": item.get("category"),
+        "subcategory": item.get("subcategory"),
+        "supplier_name": item.get("supplier_name"),
+        "manual_reorder_level": item.get("manual_reorder_level", item.get("reorder_level")),
+        "recent_waste_percentage": item.get("recent_waste_percentage", item.get("waste_percentage")),
+    }
+
+
+def _latest_cached_source_observations(app: FastAPI, user_id: str | None) -> list[dict]:
+    try:
+        latest_analysis_id = _resolve_latest_analysis_id(app, user_id)
+        latest_record = _load_analysis_record(app, latest_analysis_id, user_id=user_id)
+    except Exception:
+        return []
+
+    source_observations = getattr(latest_record, "source_observations", []) or []
+    if source_observations:
+        return [dict(observation) for observation in source_observations]
+
+    return [_item_snapshot_to_source_observation(item) for item in getattr(latest_record, "items", [])]
+
+
+def _cached_source_observations_for_analysis(
+    app: FastAPI,
+    analysis_id: str | None,
+    user_id: str | None,
+) -> list[dict]:
+    if not analysis_id:
+        return _latest_cached_source_observations(app, user_id)
+    try:
+        record = _load_analysis_record(app, analysis_id, user_id=user_id)
+    except Exception:
+        return _latest_cached_source_observations(app, user_id)
+
+    source_observations = getattr(record, "source_observations", []) or []
+    if source_observations:
+        return [dict(observation) for observation in source_observations]
+    return [_item_snapshot_to_source_observation(item) for item in getattr(record, "items", [])]
+
+
+def _choose_complete_observation_history(
+    *,
+    previous_observations: list[dict],
+    submitted_observations: list[dict],
+    session_observations: list[dict],
+    persisted_observations: list[dict] | None = None,
+) -> list[dict]:
+    baseline = [*previous_observations, *submitted_observations]
+    if len(session_observations) > len(baseline):
+        baseline = session_observations
+    if persisted_observations is not None and len(persisted_observations) >= len(baseline):
+        return _deduplicate_source_observations(persisted_observations)
+    return _deduplicate_source_observations(baseline)
+
+
+def _dedupe_value(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return round(float(stripped), 8)
+        except ValueError:
+            return stripped.lower()
+    if isinstance(value, (int, float)):
+        return round(float(value), 8)
+    return value
+
+
+def _source_observation_dedupe_key(observation: dict) -> tuple:
+    return tuple(
+        _dedupe_value(observation.get(field))
+        for field in (
+            "date",
+            "item_id",
+            "item_name",
+            "unit",
+            "category",
+            "subcategory",
+            "current_stock",
+            "usage_value",
+            "usage_period",
+            "lead_time_days",
+            "price_per_unit",
+            "seasonal_factor",
+            "supplier_name",
+            "manual_reorder_level",
+            "recent_waste_percentage",
+            "perishability_level",
+        )
+    )
+
+
+def _deduplicate_source_observations(observations: list[dict]) -> list[dict]:
+    deduplicated = []
+    seen = set()
+    for observation in observations:
+        key = _source_observation_dedupe_key(observation)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(dict(observation))
+    return deduplicated
+
+
 def _extract_bearer_token(request: Request) -> str | None:
     header = request.headers.get("Authorization")
     if not header:
@@ -606,13 +832,15 @@ def create_app(
 
     @app.get("/health", tags=["meta"])
     async def health_check():
-        supabase_raw = os.getenv("STOCKWISE_SUPABASE_ENABLED", "")
-        supabase_enabled = supabase_raw.lower() not in ("false", "0", "")
         return {
             "status": "ok",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "glm_mode": os.getenv("GLM_MODE", "mock"),
-            "supabase_enabled": supabase_enabled,
+            "supabase_enabled": _supabase_enabled(enable_supabase),
+            "supabase_store_ready": app.state.supabase_store is not None,
+            "history_snapshot_table": "analysis_source_observations",
+            "snapshot_write_mode": "required",
+            "supabase_operation_timeout_seconds": _supabase_operation_timeout_seconds(),
             "version": "0.1.0",
             "fallback_ready": True,
         }
@@ -621,7 +849,13 @@ def create_app(
     app.state.supabase_store = supabase_store if supabase_store is not None else _build_supabase_store(enable_supabase)
     app.state.glm_provider = glm_provider or provider_from_env()
     app.state.auth_user_resolver = auth_user_resolver or _build_supabase_auth_resolver(enable_supabase)
-    app.state.ai_response_cache = {"decision_briefs": {}, "chats": {}, "explanations": {}}
+    app.state.observation_history = {}
+    app.state.ai_response_cache = {
+        "decision_briefs": {},
+        "chats": {},
+        "explanations": {},
+        "tradeoff_verdicts": {},
+    }
 
     @app.exception_handler(ValidationError)
     async def handle_validation_error(_: Request, exc: ValidationError):
@@ -666,7 +900,11 @@ def create_app(
         return _analysis_record_payload(analysis_id, analysis)
 
     @app.post("/api/v1/analyses", response_model=AnalysisResponse)
-    async def create_analysis(request: Request, file: UploadFile = File(...)):
+    async def create_analysis(
+        request: Request,
+        file: UploadFile = File(...),
+        base_analysis_id: str | None = Form(None),
+    ):
         user_id = _require_authenticated_user(app, request)
         raw = await file.read()
         validated_rows, _summary = validate_inventory_csv(raw)
@@ -679,7 +917,17 @@ def create_app(
             uploaded_by=user_id,
             created_by=user_id,
         )
-        source_observations = validated_rows
+        previous_source_observations = _cached_source_observations_for_analysis(
+            app,
+            base_analysis_id,
+            user_id,
+        )
+        session_source_observations = _append_session_observation_history(app, user_id, validated_rows)
+        source_observations = _choose_complete_observation_history(
+            previous_observations=previous_source_observations,
+            submitted_observations=validated_rows,
+            session_observations=session_source_observations,
+        )
         latest_records_by_history_identity = persistence_result.get("latest_records_by_history_identity") or {}
         if (
             app.state.supabase_store is not None
@@ -687,10 +935,17 @@ def create_app(
             and hasattr(app.state.supabase_store, "list_user_observations")
         ):
             try:
-                source_observations = app.state.supabase_store.list_user_observations(user_id)
-                latest_records_by_history_identity = _latest_records_by_history_identity_from_observations(
-                    source_observations
+                persisted_source_observations = app.state.supabase_store.list_user_observations(user_id)
+                source_observations = _choose_complete_observation_history(
+                    previous_observations=previous_source_observations,
+                    submitted_observations=validated_rows,
+                    session_observations=session_source_observations,
+                    persisted_observations=persisted_source_observations,
                 )
+                if len(persisted_source_observations) >= len(source_observations):
+                    latest_records_by_history_identity = _latest_records_by_history_identity_from_observations(
+                        persisted_source_observations
+                    )
             except Exception as exc:
                 print(f"Failed to load user observation history from Supabase: {type(exc).__name__}: {exc}")
 
@@ -704,15 +959,15 @@ def create_app(
             "item_count": len(normalized_items),
             "date_range": _date_range_from_observations(source_observations),
         }
-        supabase_store_for_snapshot = None if persistence_result.get("_timed_out") else app.state.supabase_store
         analysis_id = _save_analysis(
             app.state.store,
             normalized_items,
             dataset_summary,
-            supabase_store=supabase_store_for_snapshot,
+            supabase_store=app.state.supabase_store,
             source_type="import",
             import_batch_id=persistence_result.get("import_batch_id"),
             owner_id=user_id,
+            source_observations=source_observations,
         )
         return _analysis_payload(app.state.store, analysis_id, owner_id=user_id)
 
@@ -727,7 +982,17 @@ def create_app(
             uploaded_by=user_id,
             created_by=user_id,
         )
-        source_observations = raw_items
+        previous_source_observations = _cached_source_observations_for_analysis(
+            app,
+            payload.base_analysis_id,
+            user_id,
+        )
+        session_source_observations = _append_session_observation_history(app, user_id, raw_items)
+        source_observations = _choose_complete_observation_history(
+            previous_observations=previous_source_observations,
+            submitted_observations=raw_items,
+            session_observations=session_source_observations,
+        )
         latest_records_by_history_identity = persistence_result.get("latest_records_by_history_identity") or {}
         if (
             app.state.supabase_store is not None
@@ -735,10 +1000,17 @@ def create_app(
             and hasattr(app.state.supabase_store, "list_user_observations")
         ):
             try:
-                source_observations = app.state.supabase_store.list_user_observations(user_id)
-                latest_records_by_history_identity = _latest_records_by_history_identity_from_observations(
-                    source_observations
+                persisted_source_observations = app.state.supabase_store.list_user_observations(user_id)
+                source_observations = _choose_complete_observation_history(
+                    previous_observations=previous_source_observations,
+                    submitted_observations=raw_items,
+                    session_observations=session_source_observations,
+                    persisted_observations=persisted_source_observations,
                 )
+                if len(persisted_source_observations) >= len(source_observations):
+                    latest_records_by_history_identity = _latest_records_by_history_identity_from_observations(
+                        persisted_source_observations
+                    )
             except Exception as exc:
                 print(f"Failed to load user observation history from Supabase: {type(exc).__name__}: {exc}")
 
@@ -752,15 +1024,15 @@ def create_app(
             "item_count": len(normalized_items),
             "date_range": _date_range_from_observations(source_observations),
         }
-        supabase_store_for_snapshot = None if persistence_result.get("_timed_out") else app.state.supabase_store
         analysis_id = _save_analysis(
             app.state.store,
             normalized_items,
             dataset_summary,
-            supabase_store=supabase_store_for_snapshot,
+            supabase_store=app.state.supabase_store,
             source_type="manual",
             import_batch_id=persistence_result.get("import_batch_id"),
             owner_id=user_id,
+            source_observations=source_observations,
         )
         return _analysis_payload(app.state.store, analysis_id, owner_id=user_id)
     
@@ -793,6 +1065,12 @@ def create_app(
     async def get_records(analysis_id: str, request: Request):
         user_id = _require_authenticated_user(app, request)
         analysis = _load_analysis_record(app, analysis_id, user_id=user_id)
+        analysis = _backfill_source_observations_from_supabase(
+            app,
+            analysis_id,
+            analysis,
+            user_id,
+        )
         return _records_payload_from_record(analysis_id, analysis)
 
     @app.post("/api/v1/analyses/{analysis_id}/items/{item_id}/simulate", response_model=SimulationResponse)
@@ -801,6 +1079,61 @@ def create_app(
         item = _load_analysis_item(app, analysis_id, item_id, user_id=user_id)
         simulated = simulate_item_quantity(item, payload.simulated_order_qty)
         return simulated
+
+    @app.post(
+        "/api/v1/analyses/{analysis_id}/items/{item_id}/tradeoff-verdict",
+        response_model=TradeoffVerdictResponse,
+    )
+    async def tradeoff_verdict(
+        analysis_id: str,
+        item_id: int,
+        request: Request,
+        payload: TradeoffVerdictRequest,
+        refresh: bool = Query(False),
+    ):
+        user_id = _require_authenticated_user(app, request)
+        item = _load_analysis_item(app, analysis_id, item_id, user_id=user_id)
+        simulation = simulate_item_quantity(item, payload.simulated_order_qty)
+        context = build_tradeoff_verdict_context(item, simulation)
+        cache_key = _ai_tradeoff_verdict_cache_key(
+            analysis_id=analysis_id,
+            owner_id=user_id,
+            item_id=item_id,
+            simulated_order_qty=simulation["simulated_order_qty"],
+        )
+        verdict_cache = app.state.ai_response_cache["tradeoff_verdicts"]
+        if not refresh and cache_key in verdict_cache:
+            return verdict_cache[cache_key]
+
+        provider = app.state.glm_provider
+        try:
+            raw = provider.generate_tradeoff_verdict(context)
+            parsed = parse_tradeoff_verdict_response(raw, context)
+            response = {"source": provider.source, **parsed}
+            verdict_cache[cache_key] = response
+            return response
+        except TradeoffVerdictValidationError as exc:
+            print(f"Trade-off verdict parse failed on first attempt: {type(exc).__name__}: {exc}")
+            try:
+                strict_context = {**context, "_strict_json": True}
+                raw = provider.generate_tradeoff_verdict(strict_context)
+                parsed = parse_tradeoff_verdict_response(raw, context, safety_status="retried")
+                response = {"source": provider.source, **parsed}
+                verdict_cache[cache_key] = response
+                return response
+            except Exception as retry_exc:
+                print(
+                    "Trade-off verdict retry failed, using fallback: "
+                    f"{type(retry_exc).__name__}: {retry_exc}"
+                )
+                response = build_fallback_tradeoff_verdict(context)
+                verdict_cache[cache_key] = response
+                return response
+        except Exception as exc:
+            print(f"Trade-off verdict provider failed, using fallback: {type(exc).__name__}: {exc}")
+            response = build_fallback_tradeoff_verdict(context)
+            verdict_cache[cache_key] = response
+            return response
 
     @app.patch(
         "/api/v1/analyses/{analysis_id}/items/{item_id}", response_model=RecordItem

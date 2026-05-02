@@ -6,6 +6,9 @@ import { Alert, Button } from '@/components/common';
 import { AI_ADVISOR_STARTER_PROMPTS, buildInitialAdvisorRequest, buildNextAdvisorRequest } from '@/lib/aiAdvisor';
 import { ChatMessage, ChatRequest, ChatResponse, ChatSimulationContext, RecommendedAction } from '@/types';
 
+const AUTO_PROMPT_DEDUPE_KEY = 'stockwise.aiAdvisor.autoPrompt';
+const AUTO_PROMPT_DEDUPE_WINDOW_MS = 10_000;
+
 type ConversationEntry =
   | { kind: 'user'; content: string }
   | { kind: 'assistant'; response: ChatResponse };
@@ -41,6 +44,17 @@ function getSourceBadgeColor(source: ChatResponse['source']) {
   }
 }
 
+export function normalizeAdvisorWarningFlag(value?: string | null) {
+  const text = value?.trim();
+  if (!text) {
+    return null;
+  }
+  if (['none', 'null', 'n/a', 'na', 'no warning', 'no warnings'].includes(text.toLowerCase())) {
+    return null;
+  }
+  return text;
+}
+
 export function AIAdvisorPanel({
   analysisId,
   onSendMessage,
@@ -61,6 +75,14 @@ export function AIAdvisorPanel({
       : 'analysis';
     return `stockwise.aiAdvisor.${analysisId}.${simulationKey}`;
   }, [analysisId, initialSimulationContext?.item_id, initialSimulationContext?.simulated_order_qty]);
+
+  const autoPromptSignature = useMemo(() => {
+    const normalizedInitialPrompt = initialPrompt?.trim();
+    if (!normalizedInitialPrompt) {
+      return '';
+    }
+    return `${storageKey}:${normalizedInitialPrompt}`;
+  }, [initialPrompt, storageKey]);
 
   const recentMessages = useMemo<ChatMessage[]>(
     () =>
@@ -141,10 +163,34 @@ export function AIAdvisorPanel({
     if (!initialPrompt || initialPromptSent.current) {
       return;
     }
+
+    if (typeof window !== 'undefined' && autoPromptSignature) {
+      try {
+        const raw = window.sessionStorage.getItem(AUTO_PROMPT_DEDUPE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { signature?: string; timestamp?: number };
+          if (
+            parsed.signature === autoPromptSignature
+            && Number.isFinite(parsed.timestamp)
+            && Date.now() - Number(parsed.timestamp) < AUTO_PROMPT_DEDUPE_WINDOW_MS
+          ) {
+            initialPromptSent.current = true;
+            return;
+          }
+        }
+        window.sessionStorage.setItem(
+          AUTO_PROMPT_DEDUPE_KEY,
+          JSON.stringify({ signature: autoPromptSignature, timestamp: Date.now() })
+        );
+      } catch {
+        // Ignore storage parsing failures; fallback behavior is a normal auto-send.
+      }
+    }
+
     initialPromptSent.current = true;
     setIsOpen(true);
     submitMessage(initialPrompt, initialSimulationContext);
-  }, [initialPrompt, initialSimulationContext]);
+  }, [initialPrompt, initialSimulationContext, autoPromptSignature]);
 
   const retryAssistantResponse = (assistantIndex: number) => {
     const previousUser = [...entries]
@@ -272,11 +318,11 @@ export function AIAdvisorPanel({
 
                       <p className="text-lg font-semibold leading-relaxed text-slate-950">{entry.response.answer}</p>
 
-                      {entry.response.warning_flag && (
+                      {normalizeAdvisorWarningFlag(entry.response.warning_flag) && (
                         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-base text-amber-900">
                           <div className="flex items-start gap-2">
                             <AlertTriangle className="mt-0.5 h-4 w-4" />
-                            <p>{entry.response.warning_flag}</p>
+                            <p>{normalizeAdvisorWarningFlag(entry.response.warning_flag)}</p>
                           </div>
                         </div>
                       )}

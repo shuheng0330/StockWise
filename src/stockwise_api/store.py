@@ -1,10 +1,11 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import uuid4
 
 from supabase import Client
 
-from stockwise_api.services.recommendations import build_kpi_summary
+from stockwise_api.services.manual_input import normalize_item_history
+from stockwise_api.services.recommendations import build_kpi_summary, build_ranked_analysis
 from stockwise_api.services.manual_input import normalize_manual_items
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ class AnalysisRecord:
     dataset_summary: dict
     kpi_summary: dict
     items: list[dict]
+    source_observations: list[dict] = field(default_factory=list)
 
 
 class InMemoryAnalysisStore:
@@ -29,12 +31,14 @@ class InMemoryAnalysisStore:
         items: list[dict],
         analysis_id: str | None = None,
         owner_id: str | None = None,
+        source_observations: list[dict] | None = None,
     ) -> str:
         analysis_id = analysis_id or str(uuid4())
         self._records[analysis_id] = AnalysisRecord(
             dataset_summary=dataset_summary,
             kpi_summary=kpi_summary,
             items=items,
+            source_observations=source_observations or [],
         )
         self._owners[analysis_id] = owner_id
         return analysis_id
@@ -63,11 +67,14 @@ class InMemoryAnalysisStore:
         kpi_summary: dict,
         items: list[dict],
         owner_id: str | None = None,
+        source_observations: list[dict] | None = None,
     ) -> AnalysisRecord:
         record = self.get(analysis_id, owner_id=owner_id)
         record.dataset_summary = dataset_summary
         record.kpi_summary = kpi_summary
         record.items = items
+        if source_observations is not None:
+            record.source_observations = source_observations
         return record
 
     def get_latest_analysis_id(self, owner_id: str | None = None) -> str:
@@ -295,6 +302,7 @@ class SupabaseAnalysisStore:
         source_type: str,
         import_batch_id: str | None = None,
         created_by: str | None = None,
+        source_observations: list[dict] | None = None,
         formula_version: str = "stockwise-v1",
     ) -> str:
         if source_type not in {"manual", "import"}:
@@ -323,7 +331,32 @@ class SupabaseAnalysisStore:
                 )
             ).execute()
 
+        self._persist_analysis_source_observations(
+            analysis_id=analysis_id,
+            source_observations=source_observations or [],
+        )
+
         return analysis_id
+
+    def _persist_analysis_source_observations(
+        self,
+        *,
+        analysis_id: str,
+        source_observations: list[dict],
+    ) -> None:
+        rows = [
+            {
+                "analysis_id": analysis_id,
+                "row_number": row_number,
+                "observation_data": observation,
+            }
+            for row_number, observation in enumerate(source_observations, start=1)
+        ]
+        chunk_size = 500
+        for start in range(0, len(rows), chunk_size):
+            self.supabase.table("analysis_source_observations").insert(
+                rows[start : start + chunk_size]
+            ).execute()
 
     def _analysis_item_result_payload(self, *, analysis_id: str, rank_position: int, item: dict) -> dict:
         return {
@@ -390,10 +423,20 @@ class SupabaseAnalysisStore:
                 "end": analysis_run.get("date_range_end"),
             },
         }
+        source_observations = self._source_observations_for_analysis_run(
+            analysis_run,
+            user_id=user_id,
+        )
+        expected_item_count = int(analysis_run["item_count"])
+        if source_observations and len(items) < expected_item_count:
+            items = build_ranked_analysis(
+                normalize_item_history(source_observations, preserve_item_ids=True)
+            )
         return AnalysisRecord(
             dataset_summary=dataset_summary,
             kpi_summary=build_kpi_summary(items),
             items=items,
+            source_observations=source_observations,
         )
 
     def get_latest_analysis_id(self, user_id: str | None = None) -> str:
@@ -418,6 +461,7 @@ class SupabaseAnalysisStore:
             .select("*")
             .eq("created_by", user_id)
             .order("record_date")
+            .limit(10000)
             .execute()
             .data
         )
@@ -425,6 +469,7 @@ class SupabaseAnalysisStore:
             self.supabase.table("items")
             .select("*")
             .eq("owner_id", user_id)
+            .limit(5000)
             .execute()
             .data
         )
@@ -432,45 +477,71 @@ class SupabaseAnalysisStore:
             self.supabase.table("suppliers")
             .select("*")
             .eq("owner_id", user_id)
+            .limit(5000)
             .execute()
             .data
         )
-        items_by_id = {row["item_id"]: row for row in items}
-        suppliers_by_id = {row["supplier_id"]: row for row in suppliers}
+        return _observations_from_records(records, items=items, suppliers=suppliers)
 
-        observations: list[dict] = []
-        for record in records:
-            item = items_by_id.get(record.get("item_id"))
-            if item is None:
-                continue
-            supplier = suppliers_by_id.get(item.get("supplier_id"))
-            observations.append(
-                {
-                    "date": str(record["record_date"]),
-                    "item_name": item["item_name"],
-                    "current_stock": float(record["current_stock"]),
-                    "unit": item["unit"],
-                    "usage_value": float(record["daily_usage"]),
-                    "usage_period": "daily",
-                    "lead_time_days": int(record["lead_time"]),
-                    "price_per_unit": float(record["price_per_unit"]),
-                    "seasonal_factor": float(record["seasonal_factor"]),
-                    "category": item.get("category"),
-                    "subcategory": item.get("subcategory"),
-                    "supplier_name": supplier.get("supplier_name") if supplier else None,
-                    "manual_reorder_level": float(record["reorder_level"]),
-                    "recent_waste_percentage": float(record["waste_percentage"]),
-                    "_history_identity": _history_identity_from_owner_fields(
-                        item_name=item["item_name"],
-                        unit=item.get("unit"),
-                        category=item.get("category"),
-                        subcategory=item.get("subcategory"),
-                    ),
-                    "_supabase_item_id": item["item_id"],
-                    "_latest_record_id": record["record_id"],
-                }
+    def _source_observations_for_analysis_run(self, analysis_run: dict, *, user_id: str | None) -> list[dict]:
+        snapshot_observations = self._snapshot_source_observations(str(analysis_run["analysis_id"]))
+        if snapshot_observations:
+            return snapshot_observations
+
+        owner_id = user_id or analysis_run.get("created_by")
+        if owner_id is None:
+            return []
+
+        start = analysis_run.get("date_range_start")
+        end = analysis_run.get("date_range_end")
+        observations = self.list_user_observations(str(owner_id))
+        filtered_observations = [
+            observation
+            for observation in observations
+            if _date_in_range(str(observation.get("date", "")), start=start, end=end)
+        ]
+        expected_count = int(analysis_run.get("observation_count") or 0)
+        import_batch_id = analysis_run.get("import_batch_id")
+        if len(filtered_observations) >= expected_count or not import_batch_id:
+            return filtered_observations
+
+        batch_observations = self._source_observations_for_import_batch(str(import_batch_id))
+        filtered_batch_observations = [
+            observation
+            for observation in batch_observations
+            if _date_in_range(str(observation.get("date", "")), start=start, end=end)
+        ]
+        if len(filtered_batch_observations) > len(filtered_observations):
+            return filtered_batch_observations
+        return filtered_observations
+
+    def _snapshot_source_observations(self, analysis_id: str) -> list[dict]:
+        try:
+            rows = (
+                self.supabase.table("analysis_source_observations")
+                .select("*")
+                .eq("analysis_id", analysis_id)
+                .order("row_number")
+                .limit(10000)
+                .execute()
+                .data
             )
-        return observations
+        except Exception:
+            return []
+        return [dict(row.get("observation_data") or {}) for row in rows]
+
+    def _source_observations_for_import_batch(self, import_batch_id: str) -> list[dict]:
+        records = (
+            self.supabase.table("inventory_records")
+            .select("*")
+            .eq("import_batch_id", import_batch_id)
+            .order("record_date")
+            .execute()
+            .data
+        )
+        items = self.supabase.table("items").select("*").execute().data
+        suppliers = self.supabase.table("suppliers").select("*").execute().data
+        return _observations_from_records(records, items=items, suppliers=suppliers)
 
     def get_item(self, analysis_id: str, item_id: int) -> dict:
         # Query the item_decision_metrics view for the specific item
@@ -520,6 +591,53 @@ def _history_identity_from_owner_fields(
         str(subcategory or "").strip().lower(),
     ]
     return "item:" + "|".join(identity_parts)
+
+
+def _observations_from_records(records: list[dict], *, items: list[dict], suppliers: list[dict]) -> list[dict]:
+    items_by_id = {row["item_id"]: row for row in items}
+    suppliers_by_id = {row["supplier_id"]: row for row in suppliers}
+
+    observations: list[dict] = []
+    for record in records:
+        item = items_by_id.get(record.get("item_id"))
+        if item is None:
+            continue
+        supplier = suppliers_by_id.get(item.get("supplier_id"))
+        observations.append(
+            {
+                "date": str(record["record_date"]),
+                "item_name": item["item_name"],
+                "current_stock": float(record["current_stock"]),
+                "unit": item["unit"],
+                "usage_value": float(record["daily_usage"]),
+                "usage_period": "daily",
+                "lead_time_days": int(record["lead_time"]),
+                "price_per_unit": float(record["price_per_unit"]),
+                "seasonal_factor": float(record["seasonal_factor"]),
+                "category": item.get("category"),
+                "subcategory": item.get("subcategory"),
+                "supplier_name": supplier.get("supplier_name") if supplier else None,
+                "manual_reorder_level": float(record["reorder_level"]),
+                "recent_waste_percentage": float(record["waste_percentage"]),
+                "_history_identity": _history_identity_from_owner_fields(
+                    item_name=item["item_name"],
+                    unit=item.get("unit"),
+                    category=item.get("category"),
+                    subcategory=item.get("subcategory"),
+                ),
+                "_supabase_item_id": item["item_id"],
+                "_latest_record_id": record["record_id"],
+            }
+        )
+    return observations
+
+
+def _date_in_range(value: str, *, start: str | None, end: str | None) -> bool:
+    if start is not None and value < str(start):
+        return False
+    if end is not None and value > str(end):
+        return False
+    return True
 
 
 def _analysis_item_from_result(row: dict) -> dict:

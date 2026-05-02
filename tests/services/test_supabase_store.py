@@ -47,7 +47,7 @@ class FakeTableQuery:
     def execute(self):
         rows = self.database.setdefault(self.table_name, [])
         if self.operation == "insert":
-            payload = dict(self.payload)
+            payloads = self.payload if isinstance(self.payload, list) else [self.payload]
             id_columns = {
                 "analysis_item_results": "result_id",
                 "analysis_runs": "analysis_id",
@@ -58,10 +58,14 @@ class FakeTableQuery:
                 "suppliers": "supplier_id",
             }
             id_column = id_columns.get(self.table_name)
-            if id_column and id_column not in payload:
-                payload[id_column] = f"{self.table_name}-{len(rows) + 1}"
-            rows.append(payload)
-            return FakeResult([payload])
+            inserted = []
+            for raw_payload in payloads:
+                payload = dict(raw_payload)
+                if id_column and id_column not in payload:
+                    payload[id_column] = f"{self.table_name}-{len(rows) + 1}"
+                rows.append(payload)
+                inserted.append(payload)
+            return FakeResult(inserted)
 
         if self.operation == "update":
             matched = [row for row in rows if self._matches(row)]
@@ -483,6 +487,268 @@ def test_get_analysis_snapshot_rebuilds_analysis_record():
     assert record.items[0]["item_id"] == 1
     assert record.items[0]["item_name"] == "Paneer"
     assert record.items[0]["recommended_action"] == "RESTOCK_NOW"
+
+
+def test_get_analysis_snapshot_includes_source_observations_for_owner():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+    store.persist_observations(
+        [
+            {
+                "date": "2025-06-10",
+                "item_name": "Paneer",
+                "current_stock": 12.0,
+                "unit": "kg",
+                "usage_value": 2.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+            {
+                "date": "2025-07-10",
+                "item_name": "Paneer",
+                "current_stock": 4.0,
+                "unit": "kg",
+                "usage_value": 5.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+        ],
+        source_type="import",
+        created_by="user-1",
+        uploaded_by="user-1",
+    )
+    store.persist_observations(
+        [
+            {
+                "date": "2025-07-10",
+                "item_name": "Rice",
+                "current_stock": 18.0,
+                "unit": "kg",
+                "usage_value": 3.0,
+                "usage_period": "daily",
+                "lead_time_days": 2,
+                "price_per_unit": 70.0,
+                "seasonal_factor": 1.0,
+                "category": "Grain",
+                "subcategory": "Staple",
+                "supplier_name": "Supplier B",
+                "recent_waste_percentage": 1.5,
+            }
+        ],
+        source_type="import",
+        created_by="user-2",
+        uploaded_by="user-2",
+    )
+    analysis_id = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 2,
+            "item_count": 1,
+            "date_range": {"start": "2025-06-10", "end": "2025-07-10"},
+        },
+        ranked_items=_ranked_items()[:1],
+        source_type="import",
+        created_by="user-1",
+    )
+
+    record = store.get(analysis_id, user_id="user-1")
+
+    assert len(record.items) == 1
+    assert len(record.source_observations) == 2
+    assert [observation["date"] for observation in record.source_observations] == [
+        "2025-06-10",
+        "2025-07-10",
+    ]
+    assert {observation["item_name"] for observation in record.source_observations} == {"Paneer"}
+
+
+def test_create_analysis_snapshot_persists_and_reads_exact_source_observations():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+    source_observations = [
+        {
+            "date": "2025-06-10",
+            "item_id": 1,
+            "item_name": "Paneer",
+            "current_stock": 12.0,
+            "unit": "kg",
+            "usage_value": 2.0,
+            "usage_period": "daily",
+            "lead_time_days": 3,
+            "price_per_unit": 450.0,
+            "seasonal_factor": 1.1,
+            "category": "Dairy",
+            "subcategory": "Cheese",
+            "supplier_name": "Supplier A",
+            "recent_waste_percentage": 4.0,
+        },
+        {
+            "date": "2025-09-17",
+            "item_id": 1,
+            "item_name": "Paneer",
+            "current_stock": 7.0,
+            "unit": "kg",
+            "usage_value": 5.0,
+            "usage_period": "daily",
+            "lead_time_days": 3,
+            "price_per_unit": 450.0,
+            "seasonal_factor": 1.1,
+            "category": "Dairy",
+            "subcategory": "Cheese",
+            "supplier_name": "Supplier A",
+            "recent_waste_percentage": 4.0,
+        },
+    ]
+
+    analysis_id = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 2,
+            "item_count": 1,
+            "date_range": {"start": "2025-06-10", "end": "2025-09-17"},
+        },
+        ranked_items=_ranked_items()[:1],
+        source_type="import",
+        created_by="user-1",
+        source_observations=source_observations,
+    )
+    client.database["inventory_records"] = []
+
+    record = store.get(analysis_id, user_id="user-1")
+
+    assert record.source_observations == source_observations
+
+
+def test_get_analysis_snapshot_rebuilds_items_when_stored_item_results_are_incomplete():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+    source_observations = [
+        {
+            "date": "2025-06-10",
+            "item_id": 1,
+            "item_name": "Paneer",
+            "current_stock": 12.0,
+            "unit": "kg",
+            "usage_value": 2.0,
+            "usage_period": "daily",
+            "lead_time_days": 3,
+            "price_per_unit": 450.0,
+            "seasonal_factor": 1.1,
+            "category": "Dairy",
+            "subcategory": "Cheese",
+            "supplier_name": "Supplier A",
+            "recent_waste_percentage": 4.0,
+        },
+        {
+            "date": "2025-10-31",
+            "item_id": 2,
+            "item_name": "Rice",
+            "current_stock": 18.0,
+            "unit": "kg",
+            "usage_value": 3.0,
+            "usage_period": "daily",
+            "lead_time_days": 2,
+            "price_per_unit": 70.0,
+            "seasonal_factor": 1.0,
+            "category": "Grain",
+            "subcategory": "Staple",
+            "supplier_name": "Supplier B",
+            "recent_waste_percentage": 1.5,
+        },
+    ]
+
+    analysis_id = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 2,
+            "item_count": 2,
+            "date_range": {"start": "2025-06-10", "end": "2025-10-31"},
+        },
+        ranked_items=_ranked_items()[:1],
+        source_type="import",
+        created_by="user-1",
+        source_observations=source_observations,
+    )
+
+    record = store.get(analysis_id, user_id="user-1")
+
+    assert record.dataset_summary["item_count"] == 2
+    assert record.kpi_summary["item_count"] == 2
+    assert len(record.items) == 2
+    assert {item["item_name"] for item in record.items} == {"Paneer", "Rice"}
+
+
+def test_get_analysis_snapshot_recovers_source_observations_from_owned_import_batch():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+    persistence = store.persist_observations(
+        [
+            {
+                "date": "2025-06-10",
+                "item_name": "Paneer",
+                "current_stock": 12.0,
+                "unit": "kg",
+                "usage_value": 2.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+            {
+                "date": "2025-07-10",
+                "item_name": "Paneer",
+                "current_stock": 4.0,
+                "unit": "kg",
+                "usage_value": 5.0,
+                "usage_period": "daily",
+                "lead_time_days": 3,
+                "price_per_unit": 450.0,
+                "seasonal_factor": 1.1,
+                "category": "Dairy",
+                "subcategory": "Cheese",
+                "supplier_name": "Supplier A",
+                "recent_waste_percentage": 4.0,
+            },
+        ],
+        source_type="import",
+        created_by="user-1",
+        uploaded_by="user-1",
+    )
+    for record in client.database["inventory_records"]:
+        record["created_by"] = None
+
+    analysis_id = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 2,
+            "item_count": 1,
+            "date_range": {"start": "2025-06-10", "end": "2025-07-10"},
+        },
+        ranked_items=_ranked_items()[:1],
+        source_type="import",
+        import_batch_id=persistence["import_batch_id"],
+        created_by="user-1",
+    )
+
+    record = store.get(analysis_id, user_id="user-1")
+
+    assert len(record.source_observations) == 2
+    assert [observation["date"] for observation in record.source_observations] == [
+        "2025-06-10",
+        "2025-07-10",
+    ]
 
 
 def test_get_latest_analysis_id_returns_most_recent_snapshot():

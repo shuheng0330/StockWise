@@ -396,7 +396,7 @@ def test_live_provider_uses_compact_decision_brief_narrative(monkeypatch):
     content = provider.generate_decision_brief(
         {
             "analysis": {
-                "dataset_summary": {"total_items": 3},
+                "dataset_summary": {"total_items": 3, "item_count": 3, "row_count": 1310},
                 "kpi_summary": {"restock_now_count": 1},
                 "items": [
                     {
@@ -426,6 +426,9 @@ def test_live_provider_uses_compact_decision_brief_narrative(monkeypatch):
     assert parsed["summary"] == "Restock milk first and reduce waste-risk buys."
     assert parsed["buy_today"][0]["item_name"] == "Milk"
     assert parsed["estimated_impact"]["cash"] == "Cash impact."
+    assert parsed["confidence_note"] == (
+        "High confidence from history + current records: deterministic daily usage rates and lead times over 1310 records."
+    )
 
 
 def test_live_provider_assembles_chat_response_from_compact_narrative(monkeypatch):
@@ -507,6 +510,71 @@ def test_live_provider_assembles_chat_response_from_compact_narrative(monkeypatc
     assert parsed["answer"] == "Restock milk first and reduce paneer purchases."
     assert parsed["scope"] == "analysis"
     assert parsed["related_items"][0]["item_name"] == "Milk"
+
+
+def test_live_provider_preserves_spaces_from_streamed_text_deltas(monkeypatch):
+    class SplitWhitespaceStreamClient(FakeClient):
+        def stream(self, method, url, *, json, headers):
+            self.requests.append({"method": method, "url": url, "json": json, "headers": headers})
+            return FakeStreamResponse(
+                [
+                    'data: {"choices":[{"delta":{"content":"{\\"answer\\":\\"Restock"}}]}',
+                    'data: {"choices":[{"delta":{"content":" "}}]}',
+                    'data: {"choices":[{"delta":{"content":"milk"}}]}',
+                    'data: {"choices":[{"delta":{"content":" "}}]}',
+                    'data: {"choices":[{"delta":{"content":"first.\\",\\"supporting_points\\":[\\"Milk"}}]}',
+                    'data: {"choices":[{"delta":{"content":" "}}]}',
+                    'data: {"choices":[{"delta":{"content":"is low.\\"],\\"suggested_follow_ups\\":[\\"Which items can wait?\\"],\\"warning_flag\\":null}"}}]}',
+                    "data: [DONE]",
+                ]
+            )
+
+    monkeypatch.setattr(httpx, "Client", lambda *, timeout: SplitWhitespaceStreamClient(timeout=timeout))
+    provider = LiveZAIProvider(
+        api_key="test-key",
+        base_url="https://example.test/chat",
+        model="test-model",
+    )
+
+    content = provider.generate_inventory_chat(
+        {
+            "scope": "analysis",
+            "message": "What should I buy today?",
+            "recent_messages": [],
+            "analysis": {
+                "dataset_summary": {"total_items": 1},
+                "kpi_summary": {"restock_now_count": 1, "buy_less_count": 0},
+                "items": [
+                    {
+                        "item_id": 1,
+                        "item_name": "Milk",
+                        "category": "Dairy",
+                        "subcategory": "Fresh",
+                        "current_stock": 2,
+                        "daily_usage": 5,
+                        "days_of_cover": 0.4,
+                        "estimated_waste_cost": 0,
+                        "reorder_urgency_score": 95,
+                        "waste_risk_score": 10,
+                        "recommended_action": "RESTOCK_NOW",
+                        "reason_hint": "Urgent restock needed.",
+                    }
+                ],
+            },
+            "related_items": [
+                {
+                    "item_id": 1,
+                    "item_name": "Milk",
+                    "recommended_action": "RESTOCK_NOW",
+                    "reason": "Urgent restock needed.",
+                }
+            ],
+        }
+    )
+
+    parsed = json.loads(content)
+    assert parsed["answer"] == "Restock milk first."
+    assert parsed["supporting_points"] == ["Milk is low."]
 
 
 def test_live_provider_prefers_split_read_timeout_over_legacy_total_timeout(monkeypatch):
