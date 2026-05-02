@@ -4,6 +4,13 @@ import re
 
 ALLOWED_ACTIONS = {"RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"}
 ALLOWED_PRIORITIES = {"HIGH", "MEDIUM", "LOW"}
+ALLOWED_TRADEOFF_VERDICTS = {
+    "Worth it",
+    "Too much stock",
+    "Cash-heavy but safe",
+    "Try smaller quantity",
+    "Good emergency reorder",
+}
 REQUIRED_FIELDS = {
     "item_name",
     "recommended_action",
@@ -37,6 +44,11 @@ DECISION_BRIEF_REQUIRED_FIELDS = {
     "confidence_note",
     "warning_flag",
 }
+TRADEOFF_VERDICT_REQUIRED_FIELDS = {
+    "verdict",
+    "reason",
+    "confidence_note",
+}
 CHAT_ACTION_ALIASES = {
     "DELAY_REORDER": "DELAY_PURCHASE",
     "DELAY_RESTOCK": "DELAY_PURCHASE",
@@ -53,6 +65,10 @@ class ChatValidationError(ValueError):
 
 
 class DecisionBriefValidationError(ValueError):
+    pass
+
+
+class TradeoffVerdictValidationError(ValueError):
     pass
 
 
@@ -122,6 +138,35 @@ def parse_explanation_response(payload: str, context: dict) -> dict:
             raise ExplanationValidationError("Explanation response contains unsupported revenue/profit/sales claims.")
 
     return parsed
+
+
+def parse_tradeoff_verdict_response(payload: str, context: dict, safety_status: str = "validated") -> dict:
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise TradeoffVerdictValidationError("Trade-off verdict response is not valid JSON.") from exc
+
+    missing = TRADEOFF_VERDICT_REQUIRED_FIELDS - parsed.keys()
+    if missing:
+        raise TradeoffVerdictValidationError(f"Trade-off verdict response is missing fields: {sorted(missing)}")
+    if parsed["verdict"] not in ALLOWED_TRADEOFF_VERDICTS:
+        raise TradeoffVerdictValidationError("Trade-off verdict response contains invalid verdict.")
+
+    for field in TRADEOFF_VERDICT_REQUIRED_FIELDS - {"verdict"}:
+        value = str(parsed[field])
+        if not value:
+            raise TradeoffVerdictValidationError(f"Trade-off verdict field '{field}' must not be empty.")
+        if len(value) > MAX_FIELD_LENGTH:
+            raise TradeoffVerdictValidationError(f"Trade-off verdict field '{field}' exceeds allowed length.")
+        if UNSUPPORTED_PATTERN.search(value):
+            raise TradeoffVerdictValidationError("Trade-off verdict contains unsupported revenue/profit/sales claims.")
+
+    return {
+        "verdict": parsed["verdict"],
+        "reason": str(parsed["reason"]),
+        "confidence_note": str(parsed["confidence_note"]),
+        "safety_status": safety_status,
+    }
 
 
 def parse_chat_response(payload: str, context: dict) -> dict:
@@ -374,6 +419,39 @@ def build_fallback_explanation(context: dict) -> dict:
         "suggested_next_step": suggested_next_step,
         "confidence_note": "Fallback explanation generated from deterministic rules.",
         "warning_flag": f"Trend direction: {context.get('trend_direction', 'stable')}.",
+    }
+
+
+def build_fallback_tradeoff_verdict(context: dict) -> dict:
+    current_action = context["recommended_action"]
+    simulated_action = context.get("simulated_recommended_action", current_action)
+    risk_change = context.get("simulated_risk_change", "minimal_change")
+    current_urgency = int(context.get("reorder_urgency_score", 0))
+    simulated_urgency = int(context.get("simulated_reorder_urgency_score", current_urgency))
+    current_waste = int(context.get("waste_risk_score", 0))
+    simulated_waste = int(context.get("simulated_waste_risk_score", current_waste))
+
+    if simulated_action == "RESTOCK_NOW" and risk_change == "lower_shortage_risk":
+        verdict = "Good emergency reorder"
+    elif risk_change == "higher_waste_risk" and simulated_waste >= current_waste + 8:
+        verdict = "Too much stock"
+    elif simulated_urgency <= current_urgency - 10 and risk_change == "higher_waste_risk":
+        verdict = "Cash-heavy but safe"
+    elif simulated_action in {"DELAY_PURCHASE", "MONITOR_CLOSELY"} and current_action == "RESTOCK_NOW":
+        verdict = "Worth it"
+    else:
+        verdict = "Try smaller quantity"
+
+    reason = (
+        f"The simulation moves {context['item_name']} from {current_action.replace('_', ' ').lower()} "
+        f"to {simulated_action.replace('_', ' ').lower()} with {risk_change.replace('_', ' ')}."
+    )
+    return {
+        "source": "fallback",
+        "verdict": verdict,
+        "reason": reason,
+        "confidence_note": "Fallback verdict generated from server-computed simulation metrics.",
+        "safety_status": "fallback_used",
     }
 
 

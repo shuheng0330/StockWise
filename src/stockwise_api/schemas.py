@@ -103,6 +103,7 @@ class ManualItemInput(CanonicalItemInput):
 
 class ManualAnalysisRequest(BaseModel):
     items: list[ManualItemInput]
+    base_analysis_id: str | None = None
 
 
 class RecordItem(BaseModel):
@@ -128,11 +129,31 @@ class RecordItem(BaseModel):
     ]
 
 
+class SourceObservation(BaseModel):
+    date: str | None = None
+    item_id: int | None = None
+    item_name: str
+    current_stock: float
+    unit: str
+    usage_value: float
+    usage_period: Literal["daily", "weekly"]
+    lead_time_days: int
+    price_per_unit: float
+    category: str | None = None
+    subcategory: str | None = None
+    supplier_name: str | None = None
+    perishability_level: Literal["low", "medium", "high"] | None = None
+    manual_reorder_level: float | None = None
+    seasonal_factor: float
+    recent_waste_percentage: float | None = None
+
+
 class RecordsResponse(BaseModel):
     analysis_id: str
     dataset_summary: DatasetSummary
     kpi_summary: KpiSummary
     items: list[RecordItem]
+    source_observations: list[SourceObservation] = Field(default_factory=list)
 
 
 class RecordUpdateRequest(BaseModel):
@@ -175,6 +196,24 @@ class SimulationResponse(BaseModel):
     recommended_action: Literal[
         "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
     ]
+
+
+class TradeoffVerdictRequest(BaseModel):
+    simulated_order_qty: float = Field(ge=0)
+
+
+class TradeoffVerdictResponse(BaseModel):
+    source: Literal["live", "mock", "fallback"]
+    verdict: Literal[
+        "Worth it",
+        "Too much stock",
+        "Cash-heavy but safe",
+        "Try smaller quantity",
+        "Good emergency reorder",
+    ]
+    reason: str
+    confidence_note: str
+    safety_status: Literal["validated", "retried", "fallback_used"]
 
 
 class ExplanationRequest(BaseModel):

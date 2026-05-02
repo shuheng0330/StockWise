@@ -26,6 +26,8 @@ DECISION_BRIEF_NARRATIVE_FIELDS = (
     "summary, top_tradeoffs, confidence_note, warning_flag"
 )
 DECISION_BRIEF_NARRATIVE_TOKENS = 1600
+TRADEOFF_VERDICT_FIELDS = "verdict, reason, confidence_note"
+TRADEOFF_VERDICT_TOKENS = 450
 
 SYSTEM_PROMPT = (
     "You are StockWise. Use only the provided inventory metrics. "
@@ -68,6 +70,19 @@ STRICT_DECISION_BRIEF_PROMPT_SUFFIX = (
     " Keep summary, confidence_note, and warning_flag under 220 characters. "
     "Keep each tradeoff under 140 characters. "
     "Do not use the words sales, revenue, or profit."
+)
+TRADEOFF_VERDICT_SYSTEM_PROMPT = (
+    "You are StockWise AI Trade-off Verdict for small cafe operators. "
+    "Use only the provided current item metrics and server-computed simulation metrics. "
+    "Choose exactly one verdict from: Worth it, Too much stock, Cash-heavy but safe, Try smaller quantity, Good emergency reorder. "
+    f"Return one JSON object with exactly these fields: {TRADEOFF_VERDICT_FIELDS}. "
+    "Do not invent sales, revenue, profit, supplier facts, or outside market facts. "
+    "Keep reason under 24 words and confidence_note under 18 words. "
+    "Return compact valid JSON only. Do not add markdown or code fences."
+)
+STRICT_TRADEOFF_VERDICT_PROMPT_SUFFIX = (
+    " Do not use the words sales, revenue, or profit. "
+    "Use only stock, cover, waste, urgency, and cash language."
 )
 
 
@@ -287,6 +302,30 @@ def _compact_decision_brief_context(context: dict) -> dict:
     }
 
 
+def _compact_tradeoff_verdict_context(context: dict) -> dict:
+    return {
+        "item_name": context["item_name"],
+        "current": {
+            "recommended_action": context["recommended_action"],
+            "days_of_cover": context["days_of_cover"],
+            "estimated_waste_cost": context["estimated_waste_cost"],
+            "reorder_urgency_score": context["reorder_urgency_score"],
+            "waste_risk_score": context["waste_risk_score"],
+            "stock_gap_to_lead_demand": context["stock_gap_to_lead_demand"],
+        },
+        "simulation": {
+            "simulated_order_qty": context["simulated_order_qty"],
+            "simulated_cash_outlay": context["simulated_cash_outlay"],
+            "simulated_coverage_days": context["simulated_coverage_days"],
+            "simulated_estimated_waste_cost": context["simulated_estimated_waste_cost"],
+            "simulated_risk_change": context["simulated_risk_change"],
+            "simulated_reorder_urgency_score": context["simulated_reorder_urgency_score"],
+            "simulated_waste_risk_score": context["simulated_waste_risk_score"],
+            "simulated_recommended_action": context["simulated_recommended_action"],
+        },
+    }
+
+
 def build_explanation_context(item: dict, simulation_context: dict | None = None) -> dict:
     context = {
         "item_name": item["item_name"],
@@ -314,6 +353,24 @@ def build_explanation_context(item: dict, simulation_context: dict | None = None
     }
     if simulation_context:
         context.update(simulation_context)
+    return context
+
+
+def build_tradeoff_verdict_context(item: dict, simulation: dict) -> dict:
+    context = build_explanation_context(item)
+    context.update(
+        {
+            "simulated_order_qty": simulation["simulated_order_qty"],
+            "simulated_cash_outlay": simulation["simulated_cash_outlay"],
+            "simulated_coverage_days": simulation["simulated_coverage_days"],
+            "simulated_inventory_value": simulation["simulated_inventory_value"],
+            "simulated_estimated_waste_cost": simulation["simulated_estimated_waste_cost"],
+            "simulated_risk_change": simulation["simulated_risk_change"],
+            "simulated_reorder_urgency_score": simulation["reorder_urgency_score"],
+            "simulated_waste_risk_score": simulation["waste_risk_score"],
+            "simulated_recommended_action": simulation["recommended_action"],
+        }
+    )
     return context
 
 
@@ -349,6 +406,7 @@ def build_inventory_chat_context(
                 "reorder_urgency_score": item["reorder_urgency_score"],
                 "waste_risk_score": item["waste_risk_score"],
                 "recommended_action": item["recommended_action"],
+                "history": _compact_item_history(item),
                 "reason_hint": (
                     "Urgent restock needed."
                     if item["recommended_action"] == "RESTOCK_NOW"
@@ -367,6 +425,7 @@ def build_inventory_chat_context(
         "analysis": {
             "dataset_summary": dataset_summary,
             "kpi_summary": kpi_summary,
+            "history_summary": _analysis_history_summary(dataset_summary),
             "items": compact_items,
         },
         "simulation": simulation_context,
@@ -391,6 +450,28 @@ def _brief_item_payload(item: dict) -> dict:
         "item_name": item["item_name"],
         "recommended_action": item["recommended_action"],
         "reason": item.get("reason_hint") or _brief_item_reason(item),
+    }
+
+
+def _analysis_history_summary(dataset_summary: dict) -> dict:
+    date_range = dataset_summary.get("date_range", {}) or {}
+    return {
+        "date_range": {
+            "start": date_range.get("start"),
+            "end": date_range.get("end"),
+        },
+        "source_observation_count": int(dataset_summary.get("row_count", 0)),
+        "current_item_count": int(dataset_summary.get("item_count", 0)),
+        "latest_observation_date": date_range.get("end"),
+    }
+
+
+def _compact_item_history(item: dict) -> dict:
+    return {
+        "observation_count": int(item.get("_observation_count", 1)),
+        "latest_observation_date": item.get("date"),
+        "avg_usage_7d": item.get("avg_usage_7d"),
+        "trend_direction": item.get("trend_direction"),
     }
 
 
@@ -544,9 +625,11 @@ def build_decision_brief_context(
         "analysis": {
             "dataset_summary": dataset_summary,
             "kpi_summary": kpi_summary,
+            "history_summary": _analysis_history_summary(dataset_summary),
             "items": [
                 {
                     **item,
+                    "history": _compact_item_history(item),
                     "reason_hint": _brief_item_reason(item),
                 }
                 for item in sorted_items
@@ -577,6 +660,10 @@ class BaseZAIProvider(ABC):
 
     @abstractmethod
     def generate_decision_brief(self, context: dict) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def generate_tradeoff_verdict(self, context: dict) -> str:
         raise NotImplementedError
 
 
@@ -696,6 +783,27 @@ class MockZAIProvider(BaseZAIProvider):
         }
         return json.dumps(response)
 
+    def generate_tradeoff_verdict(self, context: dict) -> str:
+        risk_change = context["simulated_risk_change"]
+        simulated_action = context["simulated_recommended_action"]
+        if risk_change == "higher_waste_risk":
+            verdict = "Cash-heavy but safe"
+        elif simulated_action == "RESTOCK_NOW":
+            verdict = "Good emergency reorder"
+        elif simulated_action == "DELAY_PURCHASE":
+            verdict = "Worth it"
+        else:
+            verdict = "Try smaller quantity"
+        response = {
+            "verdict": verdict,
+            "reason": (
+                f"The simulation changes {context['item_name']} to "
+                f"{simulated_action.replace('_', ' ').lower()} with {risk_change.replace('_', ' ')}."
+            ),
+            "confidence_note": "Mock verdict generated from grounded simulation metrics.",
+        }
+        return json.dumps(response)
+
 
 class LiveZAIProvider(BaseZAIProvider):
     source = "live"
@@ -757,6 +865,18 @@ class LiveZAIProvider(BaseZAIProvider):
             max_tokens=DECISION_BRIEF_NARRATIVE_TOKENS,
         )
         return _assemble_live_decision_brief(context, narrative)
+
+    def generate_tradeoff_verdict(self, context: dict) -> str:
+        model_context = _compact_tradeoff_verdict_context(context)
+        return self._generate_json_response(
+            _system_prompt(
+                TRADEOFF_VERDICT_SYSTEM_PROMPT,
+                context,
+                STRICT_TRADEOFF_VERDICT_PROMPT_SUFFIX,
+            ),
+            model_context,
+            max_tokens=TRADEOFF_VERDICT_TOKENS,
+        )
 
     def _generate_narrative_json(
         self,
