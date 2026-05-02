@@ -149,7 +149,7 @@ async def extract_from_unstructured_text(raw_text: str) -> list[dict]:
     extracted = []
 
     if glm_mode == "live" and api_key:
-        url = "https://api.z.ai/api/paas/v4/chat/completions"
+        url = os.getenv("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4/chat/completions")
 
         prompt = f"""You are an inventory data extractor for a Malaysian F&B/retail business.
 Extract ALL inventory items mentioned in the text. Return ONLY a valid JSON array, no markdown, no explanation.

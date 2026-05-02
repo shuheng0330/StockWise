@@ -16,6 +16,7 @@ import {
     Home,
     LogOut,
     Menu,
+    MessageSquare,
     Settings,
     Upload,
     Activity,
@@ -74,7 +75,7 @@ function NavItem({ icon, label, href, onClick, disabled, active, fullWidth }: Na
 }
 
 interface NavigationBarProps {
-    onFeatureSelect: (feature: 'upload' | 'manual') => void;
+    onFeatureSelect: (feature: 'upload' | 'manual' | 'unstructured') => void;
     currentAnalysisId?: string;
     currentItemId?: string | number;
     activeSection?: string;
@@ -133,7 +134,7 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
         setDataEntryOpen(false);
     };
 
-    const handleFeature = (feature: 'upload' | 'manual') => {
+    const handleFeature = (feature: 'upload' | 'manual' | 'unstructured') => {
         closeMobile();
         const baseQuery = activeAnalysisId ? `&baseAnalysisId=${encodeURIComponent(activeAnalysisId)}` : '';
         if (router.pathname === '/') {
@@ -180,6 +181,14 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                             <FileText className="w-4 h-4" />
                             Manual Entry
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => handleFeature('unstructured')}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                        >
+                            <MessageSquare className="w-4 h-4" />
+                            Quick Text Input
+                        </button>
                     </div>
                 </div>
             </div>
@@ -212,6 +221,14 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
                         >
                             <FileText className="w-4 h-4" />
                             Manual Entry
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleFeature('unstructured')}
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-white"
+                        >
+                            <MessageSquare className="w-4 h-4" />
+                            Quick Text Input
                         </button>
                     </div>
                 )}
