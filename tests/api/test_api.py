@@ -2321,3 +2321,194 @@ def test_user_cannot_load_another_users_analysis():
     )
 
     assert response.status_code == 404
+
+
+# --- TC-NEG-01: Canonical Validation and Auth Error ---
+
+
+def test_tc_neg01_canonical_validation_and_auth_error():
+    # Auth error: unauthenticated upload returns 401 with error envelope
+    auth_client = TestClient(create_app(auth_user_resolver=_test_user_resolver))
+    auth_response = auth_client.post(
+        "/api/v1/analyses",
+        files={"file": ("inventory.csv", OWNER_CSV, "text/csv")},
+    )
+    assert auth_response.status_code == 401
+    auth_body = auth_response.json()
+    assert "error_code" in auth_body
+    assert "message" in auth_body
+
+    # Canonical validation: invalid payload returns 422
+    client = TestClient(create_app())
+    validation_response = client.post(
+        "/api/v1/manual-analyses",
+        json={
+            "items": [
+                {
+                    "item_name": "Rice",
+                    "current_stock": 5.0,
+                    "unit": "kg",
+                    "usage_value": 2.0,
+                    "usage_period": "daily",
+                    "lead_time_days": 1,
+                    # missing: price_per_unit, seasonal_factor, waste signal
+                }
+            ]
+        },
+    )
+    assert validation_response.status_code == 422
+
+
+# --- TC-NFR-01: NFR (Performance) Latency Guard ---
+
+
+def test_tc_nfr01_slow_supabase_does_not_block_analysis_response(monkeypatch):
+    class SlowSupabaseStore:
+        def persist_observations(self, observations, **kwargs):
+            time.sleep(1)
+            return {"import_batch_id": None, "successful_rows": len(observations), "failed_rows": 0}
+
+        def create_analysis_snapshot(self, **kwargs):
+            return "nfr01-analysis-id"
+
+    monkeypatch.setenv("STOCKWISE_SUPABASE_OPERATION_TIMEOUT_SECONDS", "0.01")
+    client = TestClient(create_app(supabase_store=SlowSupabaseStore()))
+
+    start = time.perf_counter()
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    )
+    elapsed = time.perf_counter() - start
+
+    assert response.status_code == 200
+    assert elapsed < 1.0
+    assert len(response.json()["items"]) > 0
+
+
+# --- TC-NFR-02: NFR (Load/Concurrency) Burst Upload and Chat Requests ---
+
+
+def test_tc_nfr02_burst_uploads_and_chat_requests_stay_stable():
+    import concurrent.futures
+
+    client = TestClient(create_app(glm_provider=MockZAIProvider()))
+
+    # Seed one analysis for all concurrent chat requests to use
+    analysis_id = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()["analysis_id"]
+
+    BURST = 10
+    LATENCY_THRESHOLD = 2.0
+
+    def do_upload(_):
+        t0 = time.perf_counter()
+        r = client.post(
+            "/api/v1/analyses",
+            files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+        )
+        return r.status_code, time.perf_counter() - t0
+
+    def do_chat(_):
+        t0 = time.perf_counter()
+        r = client.post(
+            f"/api/v1/analyses/{analysis_id}/ai-chat",
+            json={"message": "What should I restock?", "recent_messages": []},
+        )
+        return r.status_code, time.perf_counter() - t0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=BURST * 2) as pool:
+        futures = (
+            [pool.submit(do_upload, i) for i in range(BURST)]
+            + [pool.submit(do_chat, i) for i in range(BURST)]
+        )
+        results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    statuses = [s for s, _ in results]
+    latencies = [t for _, t in results]
+
+    error_rate = sum(1 for s in statuses if s != 200) / len(statuses)
+    assert error_rate < 0.01
+    assert max(latencies) < LATENCY_THRESHOLD
+
+
+# --- IT-01: POST /api/v1/analyses → Supabase ---
+
+
+def test_it01_upload_valid_inventory_creates_supabase_snapshot():
+    class CapturingSnapshotStore:
+        def __init__(self):
+            self.snapshot_kwargs = None
+
+        def persist_observations(self, observations, **kwargs):
+            return {
+                "import_batch_id": "it01-batch",
+                "successful_rows": len(observations),
+                "failed_rows": 0,
+            }
+
+        def create_analysis_snapshot(self, **kwargs):
+            self.snapshot_kwargs = kwargs
+            return "it01-analysis-id"
+
+    store = CapturingSnapshotStore()
+    client = TestClient(create_app(supabase_store=store))
+
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_id"] == "it01-analysis-id"
+    assert len(body["items"]) > 0
+    assert store.snapshot_kwargs is not None
+    assert store.snapshot_kwargs["source_type"] == "import"
+    assert store.snapshot_kwargs["import_batch_id"] == "it01-batch"
+    assert len(store.snapshot_kwargs["ranked_items"]) == len(body["items"])
+
+
+# --- IT-02: GLM API → Parser → Frontend ---
+
+
+def test_it02_explanation_via_glm_returns_valid_json_and_fallback_on_malformed_response():
+    # Valid path: MockZAIProvider returns well-formed JSON → parser accepts it
+    client = TestClient(create_app(glm_provider=MockZAIProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    valid_response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1/explanation",
+        json={},
+    )
+    assert valid_response.status_code == 200
+    assert valid_response.json()["source"] == "mock"
+    assert valid_response.json()["recommended_action"] in {
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    }
+
+    # Fallback path: broken provider returns malformed JSON → parser fails → fallback triggered
+    class BrokenProvider(MockZAIProvider):
+        def generate_explanation(self, context):
+            return "{not-json"
+
+    client2 = TestClient(create_app(glm_provider=BrokenProvider()))
+    analysis2 = client2.post(
+        "/api/v1/analyses",
+        files={"file": ("owner_inventory.csv", OWNER_CSV, "text/csv")},
+    ).json()
+
+    fallback_response = client2.post(
+        f"/api/v1/analyses/{analysis2['analysis_id']}/items/1/explanation",
+        json={},
+    )
+    assert fallback_response.status_code == 200
+    assert fallback_response.json()["source"] == "fallback"
+    assert fallback_response.json()["recommended_action"] in {
+        "RESTOCK_NOW", "BUY_LESS", "DELAY_PURCHASE", "MONITOR_CLOSELY"
+    }
