@@ -10,6 +10,23 @@ import { ManualItemInput } from '@/types';
 import { useAuth } from '@/lib/auth';
 import toast from 'react-hot-toast';
 
+
+const FieldTooltip = ({ text }: { text: string }) => {
+  return (
+    <span className="group relative inline-block ml-1">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-300 text-gray-600 text-xs cursor-help font-bold">
+        ?
+      </span>
+      <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity
+                      fixed z-[9999] w-48 bg-gray-800 text-white text-xs rounded-lg p-2 shadow-lg
+                      pointer-events-none -translate-x-1/2 -translate-y-full -mt-2"
+           style={{ marginTop: '-0.5rem' }}>
+        {text}
+      </div>
+    </span>
+  );
+};
+
 export default function EntryPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
@@ -319,8 +336,8 @@ export default function EntryPage() {
               <InventoryItemForm onSubmit={handleManualSubmit} isLoading={isLoading} submitLabel="Create Analysis" />
             </Card>
           </div>
-        ) : (
-          // Unstructured mode
+          ) : (
+          // ==================== Unstructured Mode - Improved ====================
           <div className="space-y-6">
             <Button variant="secondary" onClick={() => { setMode(null); setUnstructuredText(''); setExtractedItems([]); }}>
               ← Back
@@ -330,11 +347,11 @@ export default function EntryPage() {
 
             <Card className="p-8">
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Quick Text Input</h2>
-              <p className="text-gray-600 mb-6">Paste supplier WhatsApp messages, notes, or invoices below. AI will extract items automatically.</p>
+              <p className="text-gray-600 mb-6">Paste supplier messages or notes. AI extracts items — you fill in missing required data.</p>
 
               <textarea
                 className="w-full h-40 p-4 border border-gray-300 rounded-lg focus:outline-none focus:border-purple-500 resize-none"
-                placeholder="Example: Supplier say fresh milk price up next week. Delivery delay 2 days. We have 20L left. Eggs 5 dozen at RM 8 per dozen."
+                placeholder="Example: Boss we finish the 2kg rice noodle already. Tomorrow need order more. Also milo stock low only 15 packet."
                 value={unstructuredText}
                 onChange={(e) => setUnstructuredText(e.target.value)}
               />
@@ -350,22 +367,130 @@ export default function EntryPage() {
               </Button>
 
               {extractedItems.length > 0 && (
-                <div className="mt-8">
-                  <h3 className="font-semibold text-lg mb-4">Extracted {extractedItems.length} items</h3>
-                  <div className="max-h-80 overflow-auto border rounded-lg p-4 bg-gray-50">
-                    {extractedItems.map((item, index) => (
-                      <div key={index} className="py-2 border-b last:border-none flex justify-between">
-                        <span className="font-medium">{item.item_name}</span>
-                        <span className="text-gray-600">{item.current_stock} {item.unit}</span>
-                      </div>
-                    ))}
+                <div className="mt-10">
+                  <h3 className="font-semibold text-lg mb-4">Review & Complete Items</h3>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Required fields are marked <span className="text-red-500">red</span>. Please fill them before creating analysis.
+                  </p>
+
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Item Name</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Current Stock</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Unit</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500">
+                            Daily Usage
+                            <FieldTooltip text="Typical quantity consumed per day. Drives demand forecasting and reorder timing." />
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500">
+                            Lead Time (days)
+                            <FieldTooltip text="Days between placing an order and receiving stock. Used to calculate reorder points." />
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500">
+                            Price per Unit
+                            <FieldTooltip text="Cost of one unit. Used to calculate total inventory value and reorder cost estimates." />
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500">
+                            Waste %
+                            <FieldTooltip text="Estimated percentage of stock lost to spoilage or damage. Affects true usage calculations." />
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {extractedItems.map((item, index) => (
+                          <tr key={index} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-medium">{item.item_name}</td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.current_stock || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].current_stock = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="text"
+                                value={item.unit || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].unit = e.target.value;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.usage_value || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].usage_value = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.lead_time_days || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].lead_time_days = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.price_per_unit || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].price_per_unit = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.recent_waste_percentage || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].recent_waste_percentage = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
 
                   <Button
                     variant="primary"
                     onClick={handleAddExtractedToAnalysis}
                     loading={isLoading}
-                    className="mt-6 w-full"
+                    disabled={extractedItems.some(item => 
+                      !item.usage_value || item.usage_value <= 0 ||
+                      !item.lead_time_days || item.lead_time_days <= 0 ||
+                      !item.price_per_unit || item.price_per_unit <= 0 ||
+                      !item.recent_waste_percentage || item.recent_waste_percentage < 0
+                    )}
+                    className="mt-8 w-full"
                   >
                     Add All Items to Analysis
                   </Button>
