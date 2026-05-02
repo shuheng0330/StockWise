@@ -7,6 +7,7 @@ const PORT = new URL(BASE_URL).port || '3001';
 
 export default defineConfig({
   testDir: './e2e',
+  tsconfig: './e2e/tsconfig.json',
   timeout: 90_000,       // full flow (AI calls + file upload) can take ~60s
   expect: { timeout: 15_000 },
   fullyParallel: false,
@@ -31,7 +32,7 @@ export default defineConfig({
   webServer: process.env.CI
     ? undefined
     : {
-        command: `PORT=${PORT} npm run dev`,
+        command: `npm run dev -- -p ${PORT}`,
         url: BASE_URL,
         reuseExistingServer: true,
         timeout: 120_000,
