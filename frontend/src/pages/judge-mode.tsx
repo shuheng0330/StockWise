@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import { NavigationBar } from '@/components/Dashboard';
 
 interface HealthData {
   status: string;
@@ -94,30 +95,28 @@ export default function JudgeModePage() {
         <title>StockWise — System Status</title>
       </Head>
       <div className="min-h-screen bg-gray-50">
-        {/* Header */}
-        <div className="bg-white border-b border-gray-200">
-          <div className="max-w-5xl mx-auto px-6 py-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                StockWise &nbsp;<span className="text-indigo-600">System Status</span>
-              </h1>
-              <p className="text-sm text-gray-500 mt-1">
-                Live evidence for judges &amp; evaluators
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              {lastRefreshed && (
-                <span className="text-xs text-gray-400">
-                  Refreshed {lastRefreshed.toLocaleTimeString()}
-                </span>
-              )}
-              <button
-                onClick={fetchHealth}
-                className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
-              >
-                Refresh
-              </button>
-            </div>
+        <NavigationBar onFeatureSelect={() => {}} activeSection="status" />
+
+        {/* Page title row */}
+        <div className="max-w-5xl mx-auto px-6 pt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">
+              System Status <span className="text-indigo-600">/ Judge Mode</span>
+            </h1>
+            <p className="text-sm text-gray-500 mt-1">Live evidence for judges &amp; evaluators</p>
+          </div>
+          <div className="flex items-center gap-3">
+            {lastRefreshed && (
+              <span className="text-xs text-gray-400">
+                Refreshed {lastRefreshed.toLocaleTimeString()}
+              </span>
+            )}
+            <button
+              onClick={fetchHealth}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
+            >
+              Refresh
+            </button>
           </div>
         </div>
 
