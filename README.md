@@ -20,6 +20,7 @@ The MVP is grounded in a 100-day, 1,000-record sample dataset across 10 recurrin
 ### Submission Notes
 
 - The documentation prepared for submission is located in the **`Docs_For_Submission`** folder.
+- The documentation prepared for submission (FINAL ROUND) is located in the **`Docs_For_Submission`** folder.
 - The deployed website currently still uses the **Z.AI API key**, so some AI responses may appear as the fallback version if the live Z.AI output is unavailable or limited.
 - Our local stack has been migrated to use the **Gemini API key**.
 - The login credentials for accessing the application are provided in the **last slide of the pitch deck**.
