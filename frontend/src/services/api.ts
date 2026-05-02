@@ -7,8 +7,11 @@ import {
   ExplanationRequest,
   ExplanationResponse,
   ManualItemInput,
+  RecordsResponse,
   SimulationRequest,
   SimulationResponse,
+  TradeoffVerdictRequest,
+  TradeoffVerdictResponse,
 } from '@/types';
 import { supabase } from '@/lib/supabase';
 
@@ -55,9 +58,12 @@ class ApiClient {
     this.recordsCache.delete(key);
   }
 
-  async uploadCsv(file: File): Promise<AnalysisResponse> {
+  async uploadCsv(file: File, baseAnalysisId?: string | null): Promise<AnalysisResponse> {
     const formData = new FormData();
     formData.append('file', file);
+    if (baseAnalysisId) {
+      formData.append('base_analysis_id', baseAnalysisId);
+    }
     const response = await this.client.post('/api/v1/analyses', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
@@ -67,8 +73,11 @@ class ApiClient {
     return response.data;
   }
 
-  async createManualAnalysis(items: ManualItemInput[]): Promise<AnalysisResponse> {
-    const response = await this.client.post('/api/v1/manual-analyses', { items });
+  async createManualAnalysis(items: ManualItemInput[], baseAnalysisId?: string | null): Promise<AnalysisResponse> {
+    const response = await this.client.post('/api/v1/manual-analyses', {
+      items,
+      base_analysis_id: baseAnalysisId || null,
+    });
     await this.cacheAnalysis(response.data);
     return response.data;
   }
@@ -88,7 +97,7 @@ class ApiClient {
     return response.data;
   }
 
-  async getRecords(analysisId: string, options?: { refresh?: boolean }): Promise<any> {
+  async getRecords(analysisId: string, options?: { refresh?: boolean }): Promise<RecordsResponse> {
     const key = await this.cacheKey(analysisId);
     if (!options?.refresh && this.recordsCache.has(key)) {
       return this.recordsCache.get(key);
@@ -120,6 +129,20 @@ class ApiClient {
     const response = await this.client.post(
       `/api/v1/analyses/${analysisId}/items/${itemId}/simulate`,
       request
+    );
+    return response.data;
+  }
+
+  async getTradeoffVerdict(
+    analysisId: string,
+    itemId: string | number,
+    request: TradeoffVerdictRequest,
+    options?: { refresh?: boolean }
+  ): Promise<TradeoffVerdictResponse> {
+    const response = await this.client.post(
+      `/api/v1/analyses/${analysisId}/items/${itemId}/tradeoff-verdict`,
+      request,
+      { params: options?.refresh ? { refresh: true } : undefined }
     );
     return response.data;
   }

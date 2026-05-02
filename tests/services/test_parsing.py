@@ -4,12 +4,15 @@ from stockwise_api.services.parsing import (
     ChatValidationError,
     DecisionBriefValidationError,
     ExplanationValidationError,
+    TradeoffVerdictValidationError,
     build_fallback_decision_brief,
     build_fallback_chat_response,
     build_fallback_explanation,
+    build_fallback_tradeoff_verdict,
     parse_decision_brief_response,
     parse_chat_response,
     parse_explanation_response,
+    parse_tradeoff_verdict_response,
 )
 
 
@@ -111,6 +114,77 @@ def test_build_fallback_explanation_returns_safe_payload():
     assert fallback["item_name"] == "Paneer"
     assert fallback["recommended_action"] == "BUY_LESS"
     assert fallback["decision_explanation"]
+
+
+def _tradeoff_context():
+    context = _context()
+    context.update(
+        {
+            "simulated_order_qty": 3.0,
+            "simulated_cash_outlay": 1350.0,
+            "simulated_coverage_days": 7.1,
+            "simulated_estimated_waste_cost": 11.5,
+            "simulated_risk_change": "lower_shortage_risk",
+            "simulated_recommended_action": "MONITOR_CLOSELY",
+        }
+    )
+    return context
+
+
+def test_parse_tradeoff_verdict_response_accepts_allowed_verdict():
+    payload = """
+    {
+      "verdict": "Cash-heavy but safe",
+      "reason": "This order lowers shortage pressure, but it commits cash and raises waste exposure.",
+      "confidence_note": "Based on simulated cover, cash outlay, urgency, and waste risk."
+    }
+    """
+
+    parsed = parse_tradeoff_verdict_response(payload, _tradeoff_context())
+
+    assert parsed["verdict"] == "Cash-heavy but safe"
+    assert parsed["reason"].startswith("This order lowers")
+
+
+def test_parse_tradeoff_verdict_response_rejects_invalid_label():
+    payload = """
+    {
+      "verdict": "Guaranteed profit",
+      "reason": "bad",
+      "confidence_note": "bad"
+    }
+    """
+
+    with pytest.raises(TradeoffVerdictValidationError, match="verdict"):
+        parse_tradeoff_verdict_response(payload, _tradeoff_context())
+
+
+def test_parse_tradeoff_verdict_response_rejects_unsupported_revenue_claims():
+    payload = """
+    {
+      "verdict": "Worth it",
+      "reason": "This will increase revenue immediately.",
+      "confidence_note": "Profit should improve."
+    }
+    """
+
+    with pytest.raises(TradeoffVerdictValidationError, match="unsupported"):
+        parse_tradeoff_verdict_response(payload, _tradeoff_context())
+
+
+def test_build_fallback_tradeoff_verdict_returns_safe_payload():
+    fallback = build_fallback_tradeoff_verdict(_tradeoff_context())
+
+    assert fallback["source"] == "fallback"
+    assert fallback["verdict"] in {
+        "Worth it",
+        "Too much stock",
+        "Cash-heavy but safe",
+        "Try smaller quantity",
+        "Good emergency reorder",
+    }
+    assert fallback["reason"]
+    assert fallback["safety_status"] == "fallback_used"
 
 
 def _chat_context():

@@ -132,13 +132,20 @@ export default function SimulationPage() {
             item={item}
             analysisId={analysisId as string}
             onSimulate={handleSimulate}
+            onGenerateTradeoffVerdict={(qty) =>
+              apiClient.getTradeoffVerdict(
+                analysisId as string,
+                itemId as string,
+                { simulated_order_qty: qty }
+              )
+            }
             isLoading={isSimulating}
           />
         </Card>
 
         {simulationResult && (
           <div className="mt-6 grid gap-3 md:grid-cols-2">
-            <Link href={buildSimulatedExplanationHref(analysisId, itemId, simulationResult.simulated_order_qty)}>
+            <Link href={buildSimulatedExplanationHref(analysisId, itemId, simulationResult.simulated_order_qty)} data-testid="view-explanation-btn">
               <Button variant="primary" size="lg" className="w-full">
                 Explain This Result
               </Button>

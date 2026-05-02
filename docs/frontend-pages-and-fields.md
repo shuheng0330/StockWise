@@ -230,12 +230,14 @@ Let the owner review, edit, or delete uploaded/manual records before relying on 
 - Delete record: `DELETE /api/v1/analyses/{analysis_id}/items/{item_id}`
 
 ## Main Features
-- Editable inventory records table
+- Editable latest inventory snapshot table
+- Source upload history table that lists every uploaded/manual observation used by the analysis
 - Inline edit or edit drawer
 - Delete item with confirmation
 - Recompute recommendation after edits
 - Show current `recommended_action` after update
 - Prevent deleting the final remaining item
+- Show source observation count, current item snapshot count, and full source date range
 
 ## Editable Fields
 - `item_name`
@@ -259,6 +261,24 @@ Let the owner review, edit, or delete uploaded/manual records before relying on 
 - `daily_usage`
 - `recommended_action`
 
+## Source Observation Fields
+The `source_observations[]` section of `GET /api/v1/analyses/{analysis_id}/records` is read-only and should remain visible even when the latest snapshot table is collapsed or filtered.
+
+- `date`
+- `item_id`
+- `item_name`
+- `current_stock`
+- `unit`
+- `usage_value`
+- `usage_period`
+- `lead_time_days`
+- `price_per_unit`
+- `category`
+- `subcategory`
+- `supplier_name`
+- `seasonal_factor`
+- `recent_waste_percentage`
+
 ## Edit Validation Rules
 - `current_stock` must be `>= 0`
 - `usage_value` must be `> 0`
@@ -276,12 +296,14 @@ Let the owner test a reorder quantity before deciding what to buy.
 
 ## Backend Endpoint
 - `POST /api/v1/analyses/{analysis_id}/items/{item_id}/simulate`
+- `POST /api/v1/analyses/{analysis_id}/items/{item_id}/tradeoff-verdict`
 
 ## Main Features
 - Choose one ranked item
 - Enter proposed reorder quantity
 - Show simulated cost, coverage, inventory value, waste cost, risk change, and updated recommendation
 - Allow user to compare current recommendation versus simulated result
+- Automatically show a compact AI Trade-off Verdict below the simulated results after simulation completes
 - Offer both `Explain This Result` and `Discuss This Simulation` after a simulation is available
 
 ## Input Fields
@@ -298,6 +320,19 @@ Let the owner test a reorder quantity before deciding what to buy.
 - `reorder_urgency_score`
 - `waste_risk_score`
 - `recommended_action`
+
+## AI Trade-off Verdict Output Fields
+- `source`
+- `verdict`
+- `reason`
+- `confidence_note`
+- `safety_status`
+
+## AI Trade-off Verdict UI States
+- Loading: `Generating AI trade-off verdict...`
+- Success: verdict label, short reason, confidence note, and source badge
+- Fallback: same visual placement with `fallback` source
+- Error: quiet warning and retry action while keeping simulated metrics visible
 
 ## Page 5: Explanation Drawer or Page
 
@@ -332,7 +367,37 @@ Explain why the system recommended a specific action.
 - `confidence_note`
 - `warning_flag`
 
-## Page 6: Error and Empty States
+## Page 6: Export Analysis Page
+
+## Purpose
+Let the owner download, print, or share the current analysis, including a report-ready business value estimate for finalist judging and business review.
+
+## Backend Source
+- Existing `GET /api/v1/analyses/{analysis_id}` response.
+- No extra backend or GLM endpoint is required for the Business Value Snapshot.
+
+## Main Features
+- CSV export
+- JSON export
+- Print / Save PDF
+- Summary of item count, restock count, buy-less count, and value at risk
+- Preview of the top 20 rows
+- Business Value Snapshot placed above the Summary card, not on the crowded dashboard
+
+## Business Value Snapshot Fields
+- Estimated monthly waste avoided
+- Estimated stockout loss avoided
+- Estimated time saved vs manual spreadsheet review
+- Suggested StockWise plan
+- Estimated value created vs subscription cost
+
+## Business Value Snapshot Copy Rules
+- Use `RM` for this section.
+- Describe values as estimated opportunity if recommendations are followed.
+- Do not claim realized savings, guaranteed ROI, revenue, profit, or sales growth.
+- Show a planning assumption note: current analysis results, four inventory review cycles per month, and existing item prices as RM-equivalent decision values.
+
+## Page 7: Error and Empty States
 
 ## Purpose
 Make validation and API failures understandable for non-technical users.
@@ -412,5 +477,6 @@ Copy:
 - Simulation Modal or Item Detail
 - Explanation Drawer
 - Dashboard AI Advisor
+- Export Analysis
 
 Authentication, account settings, persistent history, and role management are outside the current MVP scope.

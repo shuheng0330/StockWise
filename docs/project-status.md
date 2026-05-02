@@ -26,6 +26,16 @@
 - Supabase item matching now uses owner-facing identity fields instead of item name only.
 - Authenticated `created_by` / `uploaded_by` wiring is now connected for user-owned writes when bearer-token auth is enabled.
 - New uploads and manual submissions now append to the authenticated user's persisted observation history and create a fresh merged snapshot from that full per-user history.
+- Upload and manual submit flows now protect against partial Supabase history reads by falling back to the previous latest analysis source observations plus the newly submitted rows, preventing monthly CSV uploads from replacing older visible source history.
+- Upload and manual submit flows now use previous raw source rows first, fall back to previous item snapshots only when raw rows are unavailable, and merge arbitrary uploaded date ranges by actual source `Date` before scoring.
+- Exact duplicate source rows are now deduplicated before analysis so re-uploading the same CSV does not double-count observations.
+- Dashboard/Data Entry navigation now carries the current analysis as `baseAnalysisId`, and CSV/manual submissions forward it as `base_analysis_id` so new data appends to the intended prior analysis history, not an unrelated latest snapshot.
+- Supabase analysis snapshots now persist their exact source observation stream in `analysis_source_observations`, fixing the durable-history root cause instead of relying on in-memory cache or latest-analysis guessing.
+- Upload flows now still attempt the Supabase analysis snapshot when inventory observation persistence times out, fixing the case where fresh `import_batches` existed but no matching `analysis_runs` or `analysis_source_observations` were written.
+- The critical analysis snapshot write no longer uses the short optional Supabase timeout, and production diagnostics now include `stockwise.analysis_snapshot.*` log events plus `/health` snapshot metadata.
+- Supabase-loaded analysis snapshots now retain `source_observations` in the in-memory cache, preventing later uploads from degrading to latest item snapshots after a dashboard/read path warms the cache.
+- Source observation snapshot rows are inserted in chunks to make large history snapshots practical for production uploads.
+- AI Decision Brief and AI Advisor contexts now receive compact historical summaries instead of raw source rows.
 - `items.owner_id` and `suppliers.owner_id` are now part of the source-of-truth persistence design so same-named reference data does not collide across accounts.
 - `GET /api/v1/analyses/latest` is now defined as latest-for-current-user instead of a global latest snapshot.
 - Explanation generation now uses the in-memory analysis item first, so Supabase network issues do not break explanation responses for the current analysis.
@@ -36,8 +46,10 @@
 - Live GLM explanation generation verified through the configured ILMU OpenAI-compatible endpoint.
 - Live provider requests now use JSON mode, disable thinking, and allocate enough output tokens for the required explanation contract.
 - AI Inventory Advisor chat implemented on the dashboard with structured responses, simulation handoff, and deterministic fallback.
+- AI Trade-off Verdict implemented for the Simulation page, with server-computed simulation metrics, compact GLM interpretation, strict parser validation, deterministic fallback, and inline frontend rendering.
+- Business Value Snapshot added to the Export Analysis plan and frontend implementation as a deterministic report-ready estimate for monthly waste opportunity, stockout-loss opportunity, time saved, suggested StockWise plan, and value-to-price ratio.
 - Automated tests added for services and API routes.
-- Documentation updated to reflect the shared input contract, CSV compatibility behavior, observation-history normalization, and Supabase persistence behavior.
+- Documentation updated to reflect the shared input contract, CSV compatibility behavior, observation-history normalization, Supabase persistence behavior, and simulation trade-off verdict behavior.
 
 ## In Progress
 - Keeping markdown project memory current as implementation evolves.
@@ -46,9 +58,12 @@
 - None currently documented.
 
 ## Next
-- Review and apply `supabase/migrations/202604220001_create_analysis_snapshots.sql` and `supabase/migrations/202604240001_add_user_ownership_to_items_and_suppliers.sql` to the live Supabase project with `supabase db push`.
-- Verify read-after-restart behavior against the live Supabase project after migration push.
+- Redeploy the backend after the required snapshot-write fix, then confirm `/health` shows `snapshot_write_mode = required` before testing uploads.
+- Verify read-after-restart behavior against the live Supabase project after backend redeploy.
 - Keep `docs/` in sync whenever schema, validation, or scoring inputs change.
 - Add a lightweight runtime status endpoint or settings display for `mock`, `live`, and `fallback` explanation state.
 - Expand integration smoke coverage around live-compatible provider response shape without requiring network in the default test suite.
+- Capture final QA evidence for the AI Trade-off Verdict path: parser/API fallback tests, frontend rendering test, and manual simulation screenshot.
+- Capture final QA evidence for the Export Analysis Business Value Snapshot, including focused frontend tests and production build output.
 - Decide whether record edit/delete should stay snapshot-local or later become true persisted-observation mutation.
+- Audit existing production `inventory_records.created_by` backfill so older imported rows are user-owned and available through the persisted history query.

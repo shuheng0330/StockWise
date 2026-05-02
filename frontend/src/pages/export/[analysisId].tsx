@@ -5,6 +5,8 @@ import toast from 'react-hot-toast';
 import { Download, Printer, FileJson, FileSpreadsheet } from 'lucide-react';
 import { Alert, Button, Card } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
+import { BusinessValueSnapshotCard } from '@/components/BusinessValueSnapshotCard';
+import { buildBusinessValueSnapshot } from '@/lib/businessValue';
 import { apiClient } from '@/services/api';
 import { saveLatestAnalysisId } from '@/lib/analysisSession';
 import { AnalysisResponse, InventoryItem } from '@/types';
@@ -97,6 +99,10 @@ export default function ExportPage() {
     const today = new Date().toISOString().slice(0, 10);
     return `stockwise-${id.slice(0, 8)}-${today}`;
   }, [analysisId]);
+  const businessValueSnapshot = useMemo(
+    () => (analysis ? buildBusinessValueSnapshot(analysis) : null),
+    [analysis]
+  );
 
   const handleExportCsv = () => {
     if (!analysis) return;
@@ -184,7 +190,7 @@ export default function ExportPage() {
               Download all {analysis.items.length} items with scores and recommended actions.
               Opens in Excel, Google Sheets, or any spreadsheet tool.
             </p>
-            <Button variant="primary" onClick={handleExportCsv} className="inline-flex items-center gap-2 justify-center">
+            <Button variant="primary" data-testid="export-csv-btn" onClick={handleExportCsv} className="inline-flex items-center gap-2 justify-center">
               <Download className="w-4 h-4" />
               Download CSV
             </Button>
@@ -223,6 +229,8 @@ export default function ExportPage() {
             </Button>
           </Card>
         </div>
+
+        {businessValueSnapshot && <BusinessValueSnapshotCard snapshot={businessValueSnapshot} />}
 
         <Card className="p-6 mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Summary</h2>

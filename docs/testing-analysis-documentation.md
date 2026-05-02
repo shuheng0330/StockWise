@@ -37,6 +37,7 @@ This document defines the test strategy, execution baseline, risk posture, and r
   - Item-level reorder simulation.
 - AI capability layer:
   - Item explanation endpoint.
+  - AI trade-off verdict endpoint for simulation interpretation.
   - AI decision brief endpoint.
   - AI Advisor chat endpoint with simulation handoff.
 - Persistence and ownership:
@@ -47,6 +48,8 @@ This document defines the test strategy, execution baseline, risk posture, and r
   - Decision brief rendering states.
   - AI Advisor request builders.
   - Navigation/session helpers.
+  - Simulation verdict flow and verdict card rendering.
+  - Business Value Snapshot calculation and report-card rendering.
 
 ### 1.2 Out-of-Scope (Current MVP)
 - Full production-grade non-functional validation (full-scale load/stress/security test suite).
@@ -70,6 +73,8 @@ This document defines the test strategy, execution baseline, risk posture, and r
 | R10 | Supabase persistence stores source observations and supports snapshots | store + app persistence helpers | tests/services/test_supabase_store.py, tests/api/test_api.py | Covered |
 | R11 | User ownership and access scoping are enforced for analyses | auth resolver + latest/get routes | tests/api/test_api.py | Covered |
 | R12 | Frontend AI helper logic and decision brief rendering states are stable | frontend lib/components | frontend/src/lib/*.test.ts, frontend/src/components/AIDecisionBriefCard.test.tsx | Covered |
+| R13 | AI trade-off verdict interprets simulation metrics without inventing outcomes | tradeoff-verdict route + parser + Simulation UI | tests/api/test_api.py, tests/services/test_parsing.py, frontend/src/lib/simulationFlow.test.ts, frontend/src/components/ItemSimulation.test.tsx | Covered |
+| R14 | Export Analysis shows deterministic business value estimates without realized-savings claims | Export page + Business Value Snapshot helper/card | frontend/src/lib/businessValue.test.ts, frontend/src/components/BusinessValueSnapshotCard.test.tsx | Covered |
 
 ## 2. Risk Assessment and Mitigation Strategy
 
@@ -119,6 +124,7 @@ This document defines the test strategy, execution baseline, risk posture, and r
   - Manual normalization, history collapse, trend/usage derivation.
   - Recommendation and simulation behavior.
   - GLM provider payload shaping and parser safety/fallback.
+  - Trade-off verdict parser validation and deterministic fallback.
   - Supabase store persistence behavior with fake client.
 - Evidence:
   - tests/services/test_validation.py
@@ -131,7 +137,7 @@ This document defines the test strategy, execution baseline, risk posture, and r
 
 #### API and Route Integration Tests
 - Scope:
-  - Endpoints for analyses, records, simulation, explanation, decision brief, ai-chat.
+  - Endpoints for analyses, records, simulation, trade-off verdict, explanation, decision brief, ai-chat.
   - Auth handling and user ownership behavior.
   - Supabase fallback and timeout behavior.
 - Evidence:
@@ -141,14 +147,19 @@ This document defines the test strategy, execution baseline, risk posture, and r
 - Scope:
   - AI Advisor request builders and session state helpers.
   - Navigation and simulation link builders.
+  - Automatic simulation-to-verdict flow.
   - Decision brief/loading/fallback rendering logic.
+  - Business Value Snapshot arithmetic, plan recommendation, value-to-price ratio, and safe copy.
 - Evidence:
   - frontend/src/lib/aiAdvisor.test.ts
   - frontend/src/lib/analysisSession.test.ts
   - frontend/src/lib/itemIdentity.test.ts
   - frontend/src/lib/navigationTargets.test.ts
   - frontend/src/lib/simulationFlow.test.ts
+  - frontend/src/lib/businessValue.test.ts
   - frontend/src/components/AIDecisionBriefCard.test.tsx
+  - frontend/src/components/ItemSimulation.test.tsx
+  - frontend/src/components/BusinessValueSnapshotCard.test.tsx
 
 ### 3.3 Execution Rules and Pass Conditions
 - Unit/service pass condition:
@@ -261,6 +272,7 @@ This document defines the test strategy, execution baseline, risk posture, and r
 | AI-01 | Explanation request for high waste-risk item | Valid JSON schema, correct item_name/action consistency, concise safe rationale | Invalid JSON, wrong item binding, unsupported profit/revenue claims |
 | AI-02 | Dashboard decision brief generation | Structured brief with safe source/safety_status and valid item references | Unknown item IDs, hallucinated entities, missing required keys |
 | AI-03 | Advisor query with simulation context | Scope reflects simulation, related_items are bounded to analysis items | Off-scope response, unrelated items, malformed structured arrays |
+| AI-04 | Simulation trade-off verdict | One allowed verdict label with concise reason grounded in simulation metrics | Invalid label, unsupported revenue/profit/sales claims, malformed JSON |
 
 ### 6.2 Oversized Input Test
 - Define max accepted prompt/message length for ai-chat payload.
@@ -286,16 +298,16 @@ This document defines the test strategy, execution baseline, risk posture, and r
   - Parsing and fallback tests in tests/services/test_parsing.py.
   - Route-level fallback tests in tests/api/test_api.py.
 
-## 7. Current Test Execution Baseline (2026-04-24)
+## 7. Current Test Execution Baseline (2026-04-30)
 
 ### 7.1 Backend Test Discovery
-- Collected tests: 111 total.
+- Collected tests: 123 total.
 - Breakdown:
-  - tests/api/test_api.py: 41
+  - tests/api/test_api.py: 45
   - tests/services/test_analysis_pipeline.py: 6
-  - tests/services/test_glm.py: 14
+  - tests/services/test_glm.py: 18
   - tests/services/test_manual_input.py: 5
-  - tests/services/test_parsing.py: 20
+  - tests/services/test_parsing.py: 24
   - tests/services/test_runtime.py: 2
   - tests/services/test_supabase_store.py: 10
   - tests/services/test_validation.py: 13
@@ -303,18 +315,13 @@ This document defines the test strategy, execution baseline, risk posture, and r
 ### 7.2 Backend Execution Result
 - Execution mode used for deterministic run: GLM_MODE=mock.
 - Outcome:
-  - 110 passed
-  - 1 failed
-- Failing test:
-  - tests/services/test_glm.py::test_live_provider_raises_when_stream_has_no_visible_content
-- Failure summary:
-  - Expected RuntimeError on empty streamed visible content, but provider retried non-streaming and did not raise.
+  - 123 passed
 
 ### 7.3 Frontend Execution Result
-- Command: npm run test -- --watch=false
+- Command: npm run test -- --watch=false --runInBand
 - Outcome:
-  - Test suites: 6 passed, 6 total
-  - Tests: 17 passed, 17 total
+  - Test suites: 7 passed, 7 total
+  - Tests: 19 passed, 19 total
 
 ### 7.4 Observed Environment Sensitivity
 - Running API explanation tests without forcing mock mode can become long-running depending on live-provider environment configuration.

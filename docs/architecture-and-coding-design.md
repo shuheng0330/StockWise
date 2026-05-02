@@ -20,12 +20,13 @@
 - `src/stockwise_api/services/parsing.py`
 
 ## Planned Contracts
-- Upload analysis endpoint returns dataset summary, KPI summary, and item list.
-- Manual analysis endpoint accepts owner-friendly fields and returns the same analysis payload as CSV upload.
-- Records endpoint returns editable owner-facing records for the current analysis.
+- Upload analysis endpoint accepts a CSV file plus optional `base_analysis_id`, then returns dataset summary, KPI summary, and item list.
+- Manual analysis endpoint accepts owner-friendly fields plus optional `base_analysis_id`, then returns the same analysis payload as CSV upload.
+- Records endpoint returns editable owner-facing latest item records plus the uncollapsed source observations used by the current analysis.
 - Record patch endpoint updates one item and returns the updated record.
 - Record delete endpoint removes one item and returns the remaining record set.
 - Simulation endpoint returns scenario metrics and updated action.
+- Trade-off verdict endpoint returns `live`, `mock`, or `fallback` compact GLM interpretation for a server-computed simulation.
 - Explanation endpoint returns `live`, `mock`, or `fallback` explanation payload.
 - Decision brief endpoint returns `live`, `mock`, or `fallback` dashboard-level action plan payload.
 - AI chat endpoint returns `live`, `mock`, or `fallback` chat cards scoped to the current analysis or a simulation handoff.
@@ -37,6 +38,9 @@
 - CSV uploads and manual analysis requests are treated as observation streams before scoring.
 - Validated source observations are offered to Supabase persistence before they are collapsed into latest item-level analysis rows.
 - Observation streams collapse into one latest internal item per item identity before the recommendation engine runs.
+- The API keeps the merged source observation stream on the in-memory analysis record so `/records` can display historical uploads separately from the latest recommendation snapshot.
+- New CSV and manual create flows build an explicit baseline from previous latest raw source observations plus the newly submitted rows, then let a complete Supabase persisted history replace that baseline only when it is at least as complete.
+- If previous raw source observations are missing, create flows convert previous latest item snapshots into source-like fallback observations before appending the new raw rows.
 - Both entry modes must reach the recommendation engine through this same validation and normalization flow.
 - Required score-driving inputs are enforced at the canonical schema layer so the recommendation engine does not depend on fallback guesses for price or seasonality.
 
@@ -71,14 +75,18 @@
 - Observations without a source `item_id` are grouped by `item_name`, `unit`, `category`, and `subcategory` so owner-friendly manual records can build history over time.
 - Each group is sorted by `date` and original observation order.
 - The latest observation in each group supplies the current snapshot used for scoring.
+- Upload order does not determine chronology; the uploaded `Date` values determine the merged date range and the latest row per item.
+- Exact duplicate source observations are removed from the assembled stream before normalization so re-uploading the same CSV does not double-count history.
 - The grouped output preserves the first stable `item_id` for records, simulation, and explanation endpoints.
 - `avg_usage_7d` is computed from up to the seven most recent observations in the group.
 - `trend_direction` is computed from first-vs-latest usage in that recent window.
+- `/records` returns both `items[]` for the latest editable snapshots and `source_observations[]` for all historical source rows feeding those snapshots.
 
 ## Supabase Persistence Flow
 - `src/stockwise_api/store.py` contains `SupabaseAnalysisStore.persist_observations`.
 - `POST /api/v1/analyses` passes validated CSV rows to `persist_observations` with `source_type = import`, `file_name`, and `file_type = csv`.
 - `POST /api/v1/manual-analyses` passes submitted manual rows to `persist_observations` with `source_type = manual`.
+- Dashboard and Data Entry navigation carry the current analysis id as `baseAnalysisId`; the frontend sends it as `base_analysis_id` so the backend can append a new upload to the intended historical snapshot instead of guessing from whichever snapshot Supabase reports as latest.
 - API create routes resolve the authenticated Supabase user from the bearer token before any user-scoped read or write.
 - `inventory_records.created_by`, `import_batches.uploaded_by`, and `analysis_runs.created_by` are the authoritative per-user ownership fields.
 - Persistence normalizes each source observation through the same canonical manual normalization path used by analysis.
@@ -95,11 +103,19 @@
 - Ownership migration file: `supabase/migrations/202604240001_add_user_ownership_to_items_and_suppliers.sql`.
 - `analysis_runs` stores one row per analysis and owns the API-level `analysis_id` when Supabase snapshots are enabled.
 - `analysis_item_results` stores the ranked point-in-time recommendation rows for each analysis.
+- `analysis_source_observations` stores the exact raw/canonical source observation stream used for that analysis, keyed by `analysis_id` and `row_number`.
 - `analysis_item_results.app_item_id` preserves the current frontend/API integer item ID used by records, simulation, and explanation routes.
 - `analysis_item_results.item_id` and `latest_record_id` link to Supabase `items` and `inventory_records` when observation persistence returns those IDs; both remain nullable for offline/test paths.
 - API create endpoints persist the submitted observations, reload the authenticated user's full persisted observation history, collapse and rank that merged history, then persist a new analysis snapshot and use the returned `analysis_id` in the in-memory cache.
+- If the general Supabase user-history read is incomplete, API create endpoints recover the exact previous analysis source observations from `analysis_source_observations` before appending new validated rows and creating the fresh snapshot.
+- Analysis snapshot persistence is attempted even when the long-running inventory observation persistence path times out, so `analysis_runs` and `analysis_source_observations` do not disappear just because `import_batches` continues in the background.
+- `create_analysis_snapshot` runs outside `_run_optional_supabase_operation`; the upload response should wait for this critical durable snapshot and use the Supabase `analysis_id` when it succeeds.
+- The snapshot path emits `stockwise.analysis_snapshot.start`, `stockwise.analysis_snapshot.success`, `stockwise.analysis_snapshot.failure`, and `stockwise.analysis_snapshot.skipped` log events for production diagnosis.
+- `/health` reports `supabase_store_ready`, `history_snapshot_table`, `snapshot_write_mode`, and the configured Supabase timeout so a deployed backend can be checked before upload tests.
+- Source observation snapshots are inserted in chunks instead of one row at a time to keep 1,000+ row histories within the production request budget.
 - `GET /api/v1/analyses/latest` resolves the latest snapshot for the authenticated user only.
 - `GET /api/v1/analyses/{analysis_id}` reads from the in-memory cache first, then falls back to `SupabaseAnalysisStore.get`, enforcing snapshot ownership when a user ID is present.
+- Supabase fallback reads copy `source_observations` into the in-memory cache along with item snapshots so follow-up uploads keep using raw historical rows.
 - To apply schema changes to the live Supabase project, run `supabase link --project-ref fujcmskmahkvyulzxvuy` and `supabase db push` after reviewing the migration.
 
 ## Metrics and Thresholds
@@ -139,6 +155,8 @@
 - Live provider streaming is controlled by `ZAI_STREAM=true|false`. The ILMU endpoint defaults to non-streaming because its streamed chunks may contain no visible `content`, while non-streaming returns the JSON payload through the normal chat-completions message body.
 - AI decision brief uses a dashboard-level prompt with dataset summary, KPI summary, top ranked items, and deterministic impact notes. It returns `summary`, `buy_today`, `buy_less`, `delay`, `estimated_impact`, `top_tradeoffs`, `recommended_order`, `confidence_note`, and `warning_flag`.
 - AI Advisor chat uses the same live provider path but a separate inventory-Advisor prompt and a compact analysis summary instead of the explanation-only item contract.
+- AI decision brief and AI Advisor prompt contexts include compact historical summaries such as date range, source observation count, item observation count, latest observation date, average usage, and trend direction. Raw CSV/source rows are not sent to the model.
+- AI trade-off verdict uses a compact simulation prompt with current item metrics and server-computed simulation metrics. It returns `verdict`, `reason`, and `confidence_note`, and the verdict must be one of the allowed owner-facing labels.
 
 ## Parser and Fallback Flow
 - Parse JSON
@@ -149,14 +167,18 @@
 - Decision brief validation also rejects unknown item IDs, mismatched item names/actions, unsupported revenue/profit/sales claims, and overlong text before returning content to the frontend.
 - Decision brief fallback returns `source = fallback` and `safety_status = fallback_used`, with a user-visible warning to review records before ordering.
 - AI Advisor chat follows the same pattern with its own schema validation for `scope`, `supporting_points`, `related_items`, and `suggested_follow_ups`.
+- Trade-off verdict validation rejects invalid verdict labels, malformed JSON, unsupported revenue/profit/sales claims, and overlong text, then falls back to a deterministic verdict based on the same simulation metrics.
 
 ## Runtime Notes
 - App factory: `stockwise_api.api.app:create_app`
 - `create_app` accepts an injectable `supabase_store` for tests and local integration seams.
+- The frontend computes the Business Value Snapshot client-side from the existing `AnalysisResponse`; no backend endpoint or GLM call is required for these arithmetic estimates.
+- Business Value Snapshot formulas use current waste exposure, stockout shortfall value, item count, and a four-review-cycles-per-month assumption to produce report-ready opportunity estimates on the Export page.
 - Default provider mode: `mock`
 - Live provider fails fast at startup if `GLM_MODE=live` and `ZAI_API_KEY` is missing
 - The current live configuration uses the ILMU OpenAI-compatible chat-completions endpoint with `ZAI_BASE_URL=https://api.ilmu.ai/v1/chat/completions` and `ZAI_MODEL=ilmu-glm-5.1`.
 - `POST /api/v1/analyses/{analysis_id}/ai-chat` loads the authenticated user's current analysis snapshot, trims ranked items into a compact prompt context, and optionally adds one server-computed simulation comparison when `simulation_context` is provided.
+- `POST /api/v1/analyses/{analysis_id}/items/{item_id}/tradeoff-verdict` recomputes the simulation server-side from `simulated_order_qty`, then asks GLM for a concise trade-off verdict without allowing it to invent numeric outcomes.
 - `GET /api/v1/analyses/{analysis_id}/decision-brief` loads the current analysis snapshot and generates a dashboard-level GLM brief without blocking analysis creation or dashboard rendering.
 - The frontend should fetch the decision brief in parallel after loading the dashboard route; KPI cards, filters, Advisor, and the item table remain visible while the brief is pending or falls back.
 - Off-topic AI chat requests are refused deterministically instead of being forwarded to the model.
@@ -165,6 +187,7 @@
 - `dataset_summary.row_count` reports source observations; `dataset_summary.item_count` reports grouped analyzed items.
 - Record edits and deletions trigger a full re-rank and KPI recomputation for the affected analysis
 - Record payloads expose `price_per_unit` and `seasonal_factor` as non-null score-driving inputs
+- Records pages render source upload history separately from latest item snapshots so repeated monthly CSV uploads remain visible to the owner.
 
 ## Environment Variables
 - `STOCKWISE_SUPABASE_ENABLED=true|false`

@@ -15,8 +15,6 @@ const baseItem: InventoryItem = {
   price_per_unit: 450,
   seasonal_factor: 1.1,
   waste_percentage: 4,
-  avg_usage_7d: 3,
-  trend_direction: 'up',
   days_of_cover: 1.25,
   inventory_value: 2250,
   estimated_waste_cost: 90,

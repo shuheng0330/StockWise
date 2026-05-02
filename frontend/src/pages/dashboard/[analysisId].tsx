@@ -1,5 +1,6 @@
 import { AIAdvisorPanel } from '@/components/AIAdvisorPanel';
 import { AIDecisionBriefCard } from '@/components/AIDecisionBriefCard';
+import { AnalysisCoverageCard } from '@/components/AnalysisCoverageCard';
 import { Alert, Button, Card, Input } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
@@ -191,6 +192,9 @@ export default function Dashboard() {
         return 'bg-green-100 text-green-800 border-green-300';
     }
   };
+  const averageDaysCover = analysis.items.length > 0
+    ? analysis.items.reduce((total, item) => total + item.days_of_cover, 0) / analysis.items.length
+    : 0;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -213,17 +217,17 @@ export default function Dashboard() {
               <Link href={`/records/${analysisId}`}>
                 <Button variant="secondary">Review Records</Button>
               </Link>
-              <Link href={`/export/${analysisId}`}>
+              <Link href={`/export/${analysisId}`} data-testid="export-report-link">
                 <Button variant="secondary">Export</Button>
               </Link>
-              <Link href="/">
+              <Link href={`/?baseAnalysisId=${encodeURIComponent(String(analysisId))}`}>
                 <Button variant="outline">New Analysis</Button>
               </Link>
             </div>
           </div>
 
           {/* KPI Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4">
+          <div data-testid="kpi-cards" className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -280,17 +284,25 @@ export default function Dashboard() {
                 <div>
                   <p className="text-gray-600 text-sm">Avg Days Cover</p>
                   <p className="text-2xl font-bold text-green-600">
-                    {analysis.dataset_summary?.avg_days_of_cover?.toFixed(1) ?? "0.0"}                  </p>
+                    {averageDaysCover.toFixed(1)}
+                  </p>
                 </div>
               </div>
             </Card>
           </div>
+
+          <AnalysisCoverageCard
+            className="mt-4"
+            rowCount={analysis.dataset_summary.row_count}
+            itemCount={analysis.dataset_summary.item_count}
+            dateRange={analysis.dataset_summary.date_range}
+          />
         </div>
       </div>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
-        <div className="mb-6">
+        <div data-testid="decision-brief" className="mb-6">
           <AIDecisionBriefCard
             analysisId={analysisIdValue as string}
             isLoading={isBriefLoading}
@@ -326,14 +338,14 @@ export default function Dashboard() {
         {/* Results Count */}
         <div className="mb-4">
           <p className="text-gray-600">
-            Showing {sortedItems.length} of {analysis.items.length} items
+            Showing {sortedItems.length} of {analysis.items.length} current item snapshots
           </p>
         </div>
 
         {/* Items Table */}
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table data-testid="items-table" className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Item</th>
@@ -411,13 +423,13 @@ export default function Dashboard() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
+                      <span className={`inline-flex whitespace-nowrap px-3 py-1 rounded-full text-sm font-medium border ${getActionColor(item.recommended_action)}`}>
                         {item.recommended_action.replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">
                       <div className="flex gap-2">
-                        <Link href={`/simulation/${analysisId}/${item.item_id}`}>
+                        <Link href={`/simulation/${analysisId}/${item.item_id}`} data-testid="simulate-btn">
                           <Button variant="secondary" size="sm">Simulate</Button>
                         </Link>
                         <Link href={`/explanation/${analysisId}/${item.item_id}`}>
