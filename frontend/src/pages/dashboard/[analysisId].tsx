@@ -1,5 +1,6 @@
 import { AIAdvisorPanel } from '@/components/AIAdvisorPanel';
 import { AIDecisionBriefCard } from '@/components/AIDecisionBriefCard';
+import { AnalysisCoverageCard } from '@/components/AnalysisCoverageCard';
 import { Alert, Button, Card, Input } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
 import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
@@ -191,6 +192,9 @@ export default function Dashboard() {
         return 'bg-green-100 text-green-800 border-green-300';
     }
   };
+  const averageDaysCover = analysis.items.length > 0
+    ? analysis.items.reduce((total, item) => total + item.days_of_cover, 0) / analysis.items.length
+    : 0;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -216,7 +220,7 @@ export default function Dashboard() {
               <Link href={`/export/${analysisId}`} data-testid="export-report-link">
                 <Button variant="secondary">Export</Button>
               </Link>
-              <Link href="/">
+              <Link href={`/?baseAnalysisId=${encodeURIComponent(String(analysisId))}`}>
                 <Button variant="outline">New Analysis</Button>
               </Link>
             </div>
@@ -280,11 +284,19 @@ export default function Dashboard() {
                 <div>
                   <p className="text-gray-600 text-sm">Avg Days Cover</p>
                   <p className="text-2xl font-bold text-green-600">
-                    {analysis.dataset_summary?.avg_days_of_cover?.toFixed(1) ?? "0.0"}                  </p>
+                    {averageDaysCover.toFixed(1)}
+                  </p>
                 </div>
               </div>
             </Card>
           </div>
+
+          <AnalysisCoverageCard
+            className="mt-4"
+            rowCount={analysis.dataset_summary.row_count}
+            itemCount={analysis.dataset_summary.item_count}
+            dateRange={analysis.dataset_summary.date_range}
+          />
         </div>
       </div>
 
@@ -326,7 +338,7 @@ export default function Dashboard() {
         {/* Results Count */}
         <div className="mb-4">
           <p className="text-gray-600">
-            Showing {sortedItems.length} of {analysis.items.length} items
+            Showing {sortedItems.length} of {analysis.items.length} current item snapshots
           </p>
         </div>
 

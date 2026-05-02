@@ -132,6 +132,13 @@ export default function SimulationPage() {
             item={item}
             analysisId={analysisId as string}
             onSimulate={handleSimulate}
+            onGenerateTradeoffVerdict={(qty) =>
+              apiClient.getTradeoffVerdict(
+                analysisId as string,
+                itemId as string,
+                { simulated_order_qty: qty }
+              )
+            }
             isLoading={isSimulating}
           />
         </Card>

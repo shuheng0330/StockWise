@@ -1,8 +1,10 @@
+import { AnalysisCoverageCard } from '@/components/AnalysisCoverageCard';
 import { Alert, Button, Card, Input } from '@/components/common';
 import { NavigationBar } from '@/components/Dashboard';
+import { SourceObservationTable } from '@/components/SourceObservationTable';
 import { clearLatestAnalysisId, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { apiClient } from '@/services/api';
-import { InventoryItem, ManualItemInput, RecommendedAction } from '@/types';
+import { DatasetSummary, InventoryItem, ManualItemInput, RecommendedAction, SourceObservation } from '@/types';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -16,6 +18,8 @@ export default function RecordsPage() {
   const router = useRouter();
   const { analysisId } = router.query;
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [datasetSummary, setDatasetSummary] = useState<DatasetSummary | null>(null);
+  const [sourceObservations, setSourceObservations] = useState<SourceObservation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -93,7 +97,9 @@ export default function RecordsPage() {
         date: item.date || item.last_updated
       }));
 
+      setDatasetSummary(response.dataset_summary);
       setItems(normalizedItems);
+      setSourceObservations(response.source_observations || []);
     } catch (err: any) {
       if (err.response?.status === 404) {
         clearLatestAnalysisId();
@@ -185,7 +191,7 @@ export default function RecordsPage() {
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <div>
               <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Review Records</h1>
-              <p className="text-gray-600 mt-1">{items.length} items</p>
+              <p className="text-gray-600 mt-1">{items.length} current item snapshots</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Link href={`/dashboard/${analysisId}`}>
@@ -201,6 +207,20 @@ export default function RecordsPage() {
         {error && (
           <Alert type="error" message={error} onClose={() => setError('')} className="mb-6" />
         )}
+
+        {datasetSummary && (
+          <AnalysisCoverageCard
+            className="mb-4"
+            rowCount={datasetSummary.row_count}
+            itemCount={datasetSummary.item_count}
+            dateRange={datasetSummary.date_range}
+          />
+        )}
+
+        <SourceObservationTable
+          observations={sourceObservations}
+          className="mb-6"
+        />
 
         <Card className="p-4 mb-4">
           <div className="flex flex-wrap items-center gap-2 text-sm">

@@ -6,7 +6,7 @@ import { Button, Alert, Card } from '@/components/common';
 import { InventoryItemForm } from '@/components/InventoryItemForm';
 import { NavigationBar } from '@/components/Dashboard';
 import { apiClient } from '@/services/api';
-import { recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
+import { getLatestAnalysisId, recordAnalysisInHistory, saveLatestAnalysisId } from '@/lib/analysisSession';
 import { ManualItemInput } from '@/types';
 import { useAuth } from '@/lib/auth';
 import toast from 'react-hot-toast';
@@ -34,6 +34,14 @@ export default function EntryPage() {
     }
   }, [router.isReady, router.query.mode]);
 
+  const queryBaseAnalysisId = Array.isArray(router.query.baseAnalysisId)
+    ? router.query.baseAnalysisId[0]
+    : router.query.baseAnalysisId;
+
+  const getBaseAnalysisId = () => {
+    return queryBaseAnalysisId || getLatestAnalysisId();
+  };
+
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
@@ -55,7 +63,7 @@ export default function EntryPage() {
     setError('');
 
     try {
-      const response = await apiClient.uploadCsv(file);
+      const response = await apiClient.uploadCsv(file, getBaseAnalysisId());
       saveLatestAnalysisId(response.analysis_id);
       recordAnalysisInHistory({
         analysisId: response.analysis_id,
@@ -78,7 +86,7 @@ export default function EntryPage() {
     setError('');
 
     try {
-      const response = await apiClient.createManualAnalysis(items);
+      const response = await apiClient.createManualAnalysis(items, getBaseAnalysisId());
       saveLatestAnalysisId(response.analysis_id);
       const previewLabel =
         items.length === 1

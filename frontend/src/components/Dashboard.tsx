@@ -135,10 +135,11 @@ export function NavigationBar({ onFeatureSelect, currentAnalysisId, currentItemI
 
     const handleFeature = (feature: 'upload' | 'manual') => {
         closeMobile();
+        const baseQuery = activeAnalysisId ? `&baseAnalysisId=${encodeURIComponent(activeAnalysisId)}` : '';
         if (router.pathname === '/') {
             onFeatureSelect(feature);
         } else {
-            router.push(`/?mode=${feature}`);
+            router.push(`/?mode=${feature}${baseQuery}`);
         }
     };
 

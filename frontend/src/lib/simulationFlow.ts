@@ -1,4 +1,4 @@
-import { SimulationResponse } from '@/types';
+import { SimulationResponse, TradeoffVerdictResponse } from '@/types';
 
 export async function runSimulationAndStore(
   simulatedOrderQty: number,
@@ -7,6 +7,24 @@ export async function runSimulationAndStore(
 ): Promise<SimulationResponse> {
   const result = await simulate(simulatedOrderQty);
   storeResult(result);
+  return result;
+}
+
+export async function runSimulationWithVerdict(
+  simulatedOrderQty: number,
+  simulate: (qty: number) => Promise<SimulationResponse>,
+  fetchVerdict: (qty: number) => Promise<TradeoffVerdictResponse>,
+  storeResult: (result: SimulationResponse) => void,
+  storeVerdict: (result: TradeoffVerdictResponse) => void,
+  onVerdictError?: (error: unknown) => void
+): Promise<SimulationResponse> {
+  const result = await runSimulationAndStore(simulatedOrderQty, simulate, storeResult);
+  try {
+    const verdict = await fetchVerdict(result.simulated_order_qty);
+    storeVerdict(verdict);
+  } catch (error) {
+    onVerdictError?.(error);
+  }
   return result;
 }
 
