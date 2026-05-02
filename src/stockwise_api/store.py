@@ -4,7 +4,8 @@ from uuid import uuid4
 
 from supabase import Client
 
-from stockwise_api.services.recommendations import build_kpi_summary
+from stockwise_api.services.manual_input import normalize_item_history
+from stockwise_api.services.recommendations import build_kpi_summary, build_ranked_analysis
 from stockwise_api.services.manual_input import normalize_manual_items
 
 logger = logging.getLogger(__name__)
@@ -426,6 +427,11 @@ class SupabaseAnalysisStore:
             analysis_run,
             user_id=user_id,
         )
+        expected_item_count = int(analysis_run["item_count"])
+        if source_observations and len(items) < expected_item_count:
+            items = build_ranked_analysis(
+                normalize_item_history(source_observations, preserve_item_ids=True)
+            )
         return AnalysisRecord(
             dataset_summary=dataset_summary,
             kpi_summary=build_kpi_summary(items),

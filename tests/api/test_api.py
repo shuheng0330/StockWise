@@ -326,6 +326,40 @@ def test_tradeoff_verdict_endpoint_falls_back_on_malformed_provider_response():
     }
 
 
+def test_tradeoff_verdict_endpoint_falls_back_when_live_verdict_conflicts_with_simulation():
+    class ConflictingVerdictProvider(MockZAIProvider):
+        def generate_tradeoff_verdict(self, context):
+            return json.dumps(
+                {
+                    "verdict": "Try smaller quantity",
+                    "reason": "Ordering this amount extends coverage beyond the best level.",
+                    "confidence_note": "Based on simulated metrics.",
+                }
+            )
+
+    low_stock_csv = (
+        "item_name,current_stock,unit,usage_value,usage_period,lead_time_days,price_per_unit,"
+        "category,supplier_name,perishability_level,manual_reorder_level,seasonal_factor,recent_waste_percentage\n"
+        "Milk,1,liter,10,daily,3,5,Dairy,Supplier A,low,30,1.0,1.0\n"
+    )
+    client = TestClient(create_app(glm_provider=ConflictingVerdictProvider()))
+    analysis = client.post(
+        "/api/v1/analyses",
+        files={"file": ("low_stock.csv", low_stock_csv, "text/csv")},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis['analysis_id']}/items/1/tradeoff-verdict",
+        json={"simulated_order_qty": 2.0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "fallback"
+    assert body["verdict"] == "Good emergency reorder"
+    assert "still needs restocking" in body["reason"]
+
+
 def test_explanation_endpoint_returns_mock_source_by_default():
     client = TestClient(create_app(glm_provider=MockZAIProvider()))
     analysis = client.post(

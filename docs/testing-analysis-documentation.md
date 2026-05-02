@@ -73,8 +73,9 @@ This document defines the test strategy, execution baseline, risk posture, and r
 | R10 | Supabase persistence stores source observations and supports snapshots | store + app persistence helpers | tests/services/test_supabase_store.py, tests/api/test_api.py | Covered |
 | R11 | User ownership and access scoping are enforced for analyses | auth resolver + latest/get routes | tests/api/test_api.py | Covered |
 | R12 | Frontend AI helper logic and decision brief rendering states are stable | frontend lib/components | frontend/src/lib/*.test.ts, frontend/src/components/AIDecisionBriefCard.test.tsx | Covered |
-| R13 | AI trade-off verdict interprets simulation metrics without inventing outcomes | tradeoff-verdict route + parser + Simulation UI | tests/api/test_api.py, tests/services/test_parsing.py, frontend/src/lib/simulationFlow.test.ts, frontend/src/components/ItemSimulation.test.tsx | Covered |
+| R13 | AI trade-off verdict interprets simulation metrics without inventing or contradicting backend outcomes | tradeoff-verdict route + parser + Simulation UI | tests/api/test_api.py, tests/services/test_parsing.py, frontend/src/lib/simulationFlow.test.ts, frontend/src/components/ItemSimulation.test.tsx | Covered |
 | R14 | Export Analysis shows deterministic business value estimates without realized-savings claims | Export page + Business Value Snapshot helper/card | frontend/src/lib/businessValue.test.ts, frontend/src/components/BusinessValueSnapshotCard.test.tsx | Covered |
+| R15 | AI warning labels and Decision Brief confidence copy stay user-safe and history-aware | parser, GLM assembly, AI Advisor UI | tests/services/test_parsing.py, tests/services/test_glm.py, frontend/src/components/AIDecisionBriefCard.test.tsx | Covered |
 
 ## 2. Risk Assessment and Mitigation Strategy
 
@@ -149,6 +150,7 @@ This document defines the test strategy, execution baseline, risk posture, and r
   - Navigation and simulation link builders.
   - Automatic simulation-to-verdict flow.
   - Decision brief/loading/fallback rendering logic.
+  - AI Advisor placeholder warning suppression.
   - Business Value Snapshot arithmetic, plan recommendation, value-to-price ratio, and safe copy.
 - Evidence:
   - frontend/src/lib/aiAdvisor.test.ts

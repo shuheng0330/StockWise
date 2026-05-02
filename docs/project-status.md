@@ -34,6 +34,7 @@
 - Upload flows now still attempt the Supabase analysis snapshot when inventory observation persistence times out, fixing the case where fresh `import_batches` existed but no matching `analysis_runs` or `analysis_source_observations` were written.
 - The critical analysis snapshot write no longer uses the short optional Supabase timeout, and production diagnostics now include `stockwise.analysis_snapshot.*` log events plus `/health` snapshot metadata.
 - Supabase-loaded analysis snapshots now retain `source_observations` in the in-memory cache, preventing later uploads from degrading to latest item snapshots after a dashboard/read path warms the cache.
+- Supabase read recovery now rebuilds current item snapshots from `analysis_source_observations` when `analysis_item_results` is incomplete, fixing dashboard count mismatches such as 8 KPI items versus 10 source snapshots.
 - Source observation snapshot rows are inserted in chunks to make large history snapshots practical for production uploads.
 - AI Decision Brief and AI Advisor contexts now receive compact historical summaries instead of raw source rows.
 - `items.owner_id` and `suppliers.owner_id` are now part of the source-of-truth persistence design so same-named reference data does not collide across accounts.
@@ -46,6 +47,8 @@
 - Live GLM explanation generation verified through the configured ILMU OpenAI-compatible endpoint.
 - Live provider requests now use JSON mode, disable thinking, and allocate enough output tokens for the required explanation contract.
 - AI Inventory Advisor chat implemented on the dashboard with structured responses, simulation handoff, and deterministic fallback.
+- AI Advisor warning labels now suppress placeholder model values such as `none`, `null`, and `n/a` instead of showing them as yellow warning callouts.
+- AI Decision Brief confidence notes now reinforce that recommendations are grounded in history plus current records when `row_count` shows historical source observations.
 - AI Trade-off Verdict implemented for the Simulation page, with server-computed simulation metrics, compact GLM interpretation, strict parser validation, deterministic fallback, and inline frontend rendering.
 - Business Value Snapshot added to the Export Analysis plan and frontend implementation as a deterministic report-ready estimate for monthly waste opportunity, stockout-loss opportunity, time saved, suggested StockWise plan, and value-to-price ratio.
 - Automated tests added for services and API routes.
