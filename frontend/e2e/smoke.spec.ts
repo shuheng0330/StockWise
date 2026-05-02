@@ -13,6 +13,17 @@ test.describe('StockWise happy-path demo', () => {
     // in the test body (not beforeEach) to actually halt execution.
     testInfo.skip(!EMAIL || !PASSWORD, 'Set E2E_TEST_EMAIL and E2E_TEST_PASSWORD to run this test');
 
+    // Pre-seed localStorage so the first-visit guided tour does not auto-open
+    // and intercept clicks on the home page. Real users only see it once;
+    // E2E always starts in a fresh browser context, so we mark it dismissed.
+    await page.addInitScript(() => {
+      try {
+        window.localStorage.setItem('stockwise-tour-seen-v1', '1');
+      } catch {
+        // ignore — private browsing, etc.
+      }
+    });
+
     // ── 1. Login ────────────────────────────────────────────────────────────
     await page.goto('/login');
     // Wait for the login form to be fully ready before filling
