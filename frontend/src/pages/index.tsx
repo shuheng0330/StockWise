@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { Upload, FileText, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, HelpCircle } from 'lucide-react';
+import { Upload, FileText, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, HelpCircle, MessageSquare } from 'lucide-react';
 import { Button, Alert, Card } from '@/components/common';
 import { InventoryItemForm } from '@/components/InventoryItemForm';
 import { NavigationBar } from '@/components/Dashboard';
@@ -130,15 +129,23 @@ const CSV_COLUMNS: CsvColumnSpec[] = [
   },
 ];
 
+
+
 export default function EntryPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
-  const [mode, setMode] = useState<'upload' | 'manual' | null>(null);
+
+  const [mode, setMode] = useState<'upload' | 'manual' | 'unstructured' | null>(null);
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [showColumnDetails, setShowColumnDetails] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [unstructuredText, setUnstructuredText] = useState('');
+  const [extractedItems, setExtractedItems] = useState<any[]>([]);
+  const [isExtracting, setIsExtracting] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -157,7 +164,7 @@ export default function EntryPage() {
     if (!router.isReady) return;
     const queryMode = router.query.mode;
     const value = Array.isArray(queryMode) ? queryMode[0] : queryMode;
-    if (value === 'upload' || value === 'manual') {
+    if (value === 'upload' || value === 'manual' || value === 'unstructured') {
       setMode(value);
     }
   }, [router.isReady, router.query.mode]);
@@ -178,6 +185,7 @@ export default function EntryPage() {
     return null;
   }
 
+  // Existing handlers (unchanged)
   const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -236,11 +244,77 @@ export default function EntryPage() {
     }
   };
 
+  // NEW: Unstructured handlers
+  const handleExtractUnstructured = async () => {
+    if (!unstructuredText.trim()) {
+      toast.error('Please paste some text first');
+      return;
+    }
+
+    setIsExtracting(true);
+    setError('');
+
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+      const res = await fetch(`${baseUrl}/api/v1/unstructured/extract`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_text: unstructuredText }),
+      });
+
+      if (!res.ok) throw new Error('Extraction failed');
+
+      const response = await res.json();
+
+      setExtractedItems((response.extracted_items || []).map((item: any) => ({
+        ...item,
+        perishability_level: item.perishability_level || 'medium',
+      })));
+      toast.success(`Extracted ${response.count} items successfully!`);
+    } catch (err: any) {
+      const message = err.message || 'Extraction failed';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+  
+  const handleAddExtractedToAnalysis = async () => {
+    if (extractedItems.length === 0) return;
+
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const response = await apiClient.createManualAnalysis(extractedItems);
+      saveLatestAnalysisId(response.analysis_id);
+
+      recordAnalysisInHistory({
+        analysisId: response.analysis_id,
+        label: `Unstructured input (${extractedItems.length} items)`,
+        source: 'unstructured' as any,   // ← Fixed TypeScript error
+      });
+
+      toast.success('Analysis created from text input!');
+      router.push(`/dashboard/${response.analysis_id}`);
+    } catch (err: any) {
+      const message = err.response?.data?.message || err.message || 'Failed to create analysis';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Navigation Bar */}
       <NavigationBar
-        onFeatureSelect={setMode}
+        onFeatureSelect={(value) => {
+          if (value === 'upload' || value === 'manual' || value === 'unstructured') {
+            setMode(value);
+          }
+        }}
         activeSection="home"
       />
 
@@ -271,8 +345,8 @@ export default function EntryPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* CSV Upload Option */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* CSV Upload */}
               <Card className="p-8 cursor-pointer hover:shadow-lg transition">
                 <button
                   data-testid="csv-upload-card"
@@ -283,9 +357,7 @@ export default function EntryPage() {
                     <Upload className="w-6 h-6 text-blue-600" />
                   </div>
                   <h3 className="text-lg font-semibold text-gray-900 mb-2">Upload CSV</h3>
-                  <p className="text-gray-600 text-sm mb-4">
-                    Upload your inventory CSV file for rapid analysis.
-                  </p>
+                  <p className="text-gray-600 text-sm mb-4">Upload your inventory CSV file for rapid analysis.</p>
                   <ul className="text-gray-600 text-sm space-y-1">
                     <li>✓ Accepts standard CSV format</li>
                     <li>✓ Fast processing</li>
@@ -294,19 +366,14 @@ export default function EntryPage() {
                 </button>
               </Card>
 
-              {/* Manual Entry Option */}
+              {/* Manual Entry */}
               <Card className="p-8 cursor-pointer hover:shadow-lg transition">
-                <button
-                  onClick={() => setMode('manual')}
-                  className="w-full text-left"
-                >
+                <button onClick={() => setMode('manual')} className="w-full text-left">
                   <div className="flex items-center justify-center w-12 h-12 bg-green-100 rounded-lg mb-4">
                     <FileText className="w-6 h-6 text-green-600" />
                   </div>
                   <h3 className="text-lg font-semibold text-gray-900 mb-2">Manual Entry</h3>
-                  <p className="text-gray-600 text-sm mb-4">
-                    Enter inventory items one by one for precise control.
-                  </p>
+                  <p className="text-gray-600 text-sm mb-4">Enter inventory items one by one for precise control.</p>
                   <ul className="text-gray-600 text-sm space-y-1">
                     <li>✓ Full control over data</li>
                     <li>✓ Add, duplicate, remove items</li>
@@ -314,9 +381,25 @@ export default function EntryPage() {
                   </ul>
                 </button>
               </Card>
+
+              {/* Quick Text Input */}
+              <Card className="p-8 cursor-pointer hover:shadow-lg transition">
+                <button onClick={() => setMode('unstructured')} className="w-full text-left">
+                  <div className="flex items-center justify-center w-12 h-12 bg-purple-100 rounded-lg mb-4">
+                    <MessageSquare className="w-6 h-6 text-purple-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">Quick Text Input</h3>
+                  <p className="text-gray-600 text-sm mb-4">Paste WhatsApp messages, supplier notes, or invoices.</p>
+                  <ul className="text-gray-600 text-sm space-y-1">
+                    <li>✓ AI extracts items automatically</li>
+                    <li>✓ Works with messy text</li>
+                    <li>✓ Real-world SME friendly</li>
+                  </ul>
+                </button>
+              </Card>
             </div>
 
-            {/* CSV Format Help */}
+            {/* CSV Format Help - THIS SECTION WAS MISSING IN MY PREVIOUS VERSION */}
             <div className="mt-12 bg-white rounded-lg p-6 shadow">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
                 <div>
@@ -422,22 +505,10 @@ export default function EntryPage() {
           </>
         ) : mode === 'upload' ? (
           <div className="space-y-6">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setMode(null);
-                if (router.query.mode) {
-                  router.replace('/', undefined, { shallow: true });
-                }
-              }}
-            >
+            <Button variant="secondary" onClick={() => setMode(null)}>
               ← Back
             </Button>
-
-            {error && (
-              <Alert type="error" message={error} onClose={() => setError('')} />
-            )}
-
+            {error && <Alert type="error" message={error} onClose={() => setError('')} />}
             <Card className="p-8">
               <h2 className="text-2xl font-bold text-gray-900 mb-4">Upload CSV</h2>
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
@@ -465,31 +536,181 @@ export default function EntryPage() {
               </div>
             </Card>
           </div>
-        ) : (
+        ) : mode === 'manual' ? (
           <div className="space-y-6">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setMode(null);
-                if (router.query.mode) {
-                  router.replace('/', undefined, { shallow: true });
-                }
-              }}
-            >
+            <Button variant="secondary" onClick={() => setMode(null)}>
+              ← Back
+            </Button>
+            {error && <Alert type="error" message={error} onClose={() => setError('')} />}
+            <Card className="p-8">
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">Manual Inventory Entry</h2>
+              <InventoryItemForm onSubmit={handleManualSubmit} isLoading={isLoading} submitLabel="Create Analysis" />
+            </Card>
+          </div>
+          ) : (
+          // ==================== Unstructured Mode - Improved ====================
+          <div className="space-y-6">
+            <Button variant="secondary" onClick={() => { setMode(null); setUnstructuredText(''); setExtractedItems([]); }}>
               ← Back
             </Button>
 
-            {error && (
-              <Alert type="error" message={error} onClose={() => setError('')} />
-            )}
+            {error && <Alert type="error" message={error} onClose={() => setError('')} />}
 
             <Card className="p-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Manual Inventory Entry</h2>
-              <InventoryItemForm
-                onSubmit={handleManualSubmit}
-                isLoading={isLoading}
-                submitLabel="Create Analysis"
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Quick Text Input</h2>
+              <p className="text-gray-500 text-sm mb-6">Paste supplier messages or notes. AI extracts items — you fill in missing required data.</p>
+
+              <textarea
+                className="w-full h-40 p-4 border border-gray-300 rounded-lg focus:outline-none focus:border-purple-500 resize-none"
+                placeholder="Example: Boss we finish the 2kg rice noodle already. Tomorrow need order more. Also milo stock low only 15 packet."
+                value={unstructuredText}
+                onChange={(e) => setUnstructuredText(e.target.value)}
               />
+
+              <Button
+                variant="primary"
+                onClick={handleExtractUnstructured}
+                disabled={isExtracting || !unstructuredText.trim()}
+                loading={isExtracting}
+                className="mt-4 w-full"
+              >
+                {isExtracting ? 'Extracting with AI...' : 'Extract Items with AI'}
+              </Button>
+
+              {extractedItems.length > 0 && (
+                <div className="mt-10">
+                  <h3 className="font-semibold text-lg mb-4">Review & Complete Items</h3>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Required fields are marked <span className="text-red-500">red</span>. Please fill them before creating analysis.
+                  </p>
+
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Item Name</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Current Stock</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Unit</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500 cursor-help"
+                              title="Typical quantity consumed per day. Drives demand forecasting and reorder timing.">
+                            Daily Usage ⓘ
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500 cursor-help"
+                              title="Days between placing an order and receiving stock. Used to calculate reorder points.">
+                            Lead Time (days) ⓘ
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500 cursor-help"
+                              title="Cost of one unit. Used to calculate total inventory value and reorder cost estimates.">
+                            Price per Unit ⓘ
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-red-500 cursor-help"
+                              title="How quickly this item spoils. Low = dry/canned, Medium = chilled, High = fresh produce/dairy.">
+                            Perishability Level ⓘ
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {extractedItems.map((item, index) => (
+                          <tr key={index} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-medium">{item.item_name}</td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.current_stock || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].current_stock = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="text"
+                                value={item.unit || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].unit = e.target.value;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.usage_value || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].usage_value = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.lead_time_days || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].lead_time_days = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={item.price_per_unit || ''}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].price_per_unit = parseFloat(e.target.value) || 0;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="w-20 border rounded px-2 py-1 text-center"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <select
+                                value={item.perishability_level || 'medium'}
+                                onChange={(e) => {
+                                  const newItems = [...extractedItems];
+                                  newItems[index].perishability_level = e.target.value;
+                                  setExtractedItems(newItems);
+                                }}
+                                className="border rounded px-2 py-1 text-sm"
+                              >
+                                <option value="low">Low – Dry/canned</option>
+                                <option value="medium">Medium – Chilled</option>
+                                <option value="high">High – Fresh/dairy</option>
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <Button
+                    variant="primary"
+                    onClick={handleAddExtractedToAnalysis}
+                    loading={isLoading}
+                    disabled={extractedItems.some(item =>
+                      !item.usage_value || item.usage_value <= 0 ||
+                      !item.lead_time_days || item.lead_time_days <= 0 ||
+                      !item.price_per_unit || item.price_per_unit <= 0 ||
+                      !item.perishability_level
+                    )}
+                    className="mt-8 w-full"
+                  >
+                    Add All Items to Analysis
+                  </Button>
+
+                </div>
+              )}
             </Card>
           </div>
         )}
