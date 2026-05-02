@@ -64,11 +64,14 @@ def _compute_scores(item: Dict[str, Any], score_context: Dict[str, float]) -> tu
 
 
 def _classify_action(item: Dict[str, Any], reorder_urgency_score: int, waste_risk_score: int) -> str:
-    # High Urgency (Lowered to 55 to catch scores like 60)
-    if reorder_urgency_score >= 55 or item.get("stock_gap_to_lead_demand", 0) < 0:
+    # Fix for the "Eggs" anomaly: Only force a restock due to a gap if urgency is at least 20
+    force_restock = item.get("stock_gap_to_lead_demand", 0) < 0 and reorder_urgency_score > 20
+
+    # High Urgency
+    if reorder_urgency_score >= 55 or force_restock:
         return "RESTOCK_NOW"
     
-    # High Waste boundary (Shifted to 60 as requested)
+    # High Waste boundary
     if waste_risk_score >= 60 and reorder_urgency_score < 55:
         return "BUY_LESS"
     

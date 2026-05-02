@@ -12,6 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from supabase import Client, ClientOptions, create_client
 from dotenv import load_dotenv
+from stockwise_api.api.unstructured import extract_from_unstructured_text
+from pydantic import BaseModel
+
+class UnstructuredRequest(BaseModel):
+    raw_text: str
 
 from stockwise_api.schemas import (
     AnalysisResponse,
@@ -1030,6 +1035,31 @@ def create_app(
             source_observations=source_observations,
         )
         return _analysis_payload(app.state.store, analysis_id, owner_id=user_id)
+    
+
+    
+
+    @app.post("/api/v1/unstructured/extract")
+    async def extract_unstructured(data: dict):
+        """Extract structured items from messy text"""
+        print("=== RECEIVED UNSTRUCTURED REQUEST ===")
+        print("Request body:", data)
+        raw_text = data.get("raw_text", "")
+        print(f"Raw text length: {len(raw_text)}")
+        print("================================")
+
+        if not raw_text:
+            print("ERROR: No raw_text provided")
+            raise HTTPException(status_code=400, detail="raw_text is required")
+
+        extracted_items = await extract_from_unstructured_text(raw_text)
+        return {
+            "success": True,
+            "extracted_items": extracted_items,
+            "count": len(extracted_items),
+            "message": f"Successfully extracted {len(extracted_items)} items."
+        }
+        
 
     @app.get("/api/v1/analyses/{analysis_id}/records", response_model=RecordsResponse)
     async def get_records(analysis_id: str, request: Request):
