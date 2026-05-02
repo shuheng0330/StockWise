@@ -461,6 +461,7 @@ class SupabaseAnalysisStore:
             .select("*")
             .eq("created_by", user_id)
             .order("record_date")
+            .limit(10000)
             .execute()
             .data
         )
@@ -468,6 +469,7 @@ class SupabaseAnalysisStore:
             self.supabase.table("items")
             .select("*")
             .eq("owner_id", user_id)
+            .limit(5000)
             .execute()
             .data
         )
@@ -475,6 +477,7 @@ class SupabaseAnalysisStore:
             self.supabase.table("suppliers")
             .select("*")
             .eq("owner_id", user_id)
+            .limit(5000)
             .execute()
             .data
         )
@@ -519,6 +522,7 @@ class SupabaseAnalysisStore:
                 .select("*")
                 .eq("analysis_id", analysis_id)
                 .order("row_number")
+                .limit(10000)
                 .execute()
                 .data
             )
