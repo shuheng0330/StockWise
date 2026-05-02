@@ -12,5 +12,8 @@ Current upload-history design:
 - `create_analysis_snapshot` is intentionally called outside the optional Supabase timeout wrapper because `analysis_runs` is the durable API analysis identity; failures are logged with `stockwise.analysis_snapshot.*` events and the in-memory fallback is used only after an actual exception.
 - `/health` exposes `snapshot_write_mode = required`, `history_snapshot_table`, and `supabase_store_ready` so deployments can be checked before upload testing.
 - Supabase-loaded analyses keep `source_observations` when copied into the in-memory cache, preventing follow-up uploads from falling back to latest item snapshots.
+- Supabase reads rebuild ranked current items from `analysis_source_observations` when stored `analysis_item_results` are incomplete, so the durable raw snapshot remains the recovery source of truth.
 - If previous raw rows are unavailable, create flows convert previous latest item snapshots into source-like fallback observations before appending new raw rows.
 - Exact duplicate source observations are deduplicated, the merged stream is sorted by uploaded `Date`, and AI receives compact history summaries rather than raw CSV rows.
+- The live ZAI stream collector preserves raw text deltas until the complete response is assembled, then strips JSON fences once so whitespace-only chunks are not lost.
+- Explanation parsing normalizes provider text fields before route responses are cached or returned, including converting `warning_flag` false/null to an empty string and true to a safe review message.

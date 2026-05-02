@@ -116,6 +116,7 @@
 - `GET /api/v1/analyses/latest` resolves the latest snapshot for the authenticated user only.
 - `GET /api/v1/analyses/{analysis_id}` reads from the in-memory cache first, then falls back to `SupabaseAnalysisStore.get`, enforcing snapshot ownership when a user ID is present.
 - Supabase fallback reads copy `source_observations` into the in-memory cache along with item snapshots so follow-up uploads keep using raw historical rows.
+- If `analysis_item_results` has fewer rows than `analysis_runs.item_count`, Supabase reads rebuild the ranked current item snapshots from `analysis_source_observations` and recompute KPI summaries from that recovered item set.
 - To apply schema changes to the live Supabase project, run `supabase link --project-ref fujcmskmahkvyulzxvuy` and `supabase db push` after reviewing the migration.
 
 ## Metrics and Thresholds
@@ -167,7 +168,10 @@
 - Decision brief validation also rejects unknown item IDs, mismatched item names/actions, unsupported revenue/profit/sales claims, and overlong text before returning content to the frontend.
 - Decision brief fallback returns `source = fallback` and `safety_status = fallback_used`, with a user-visible warning to review records before ordering.
 - AI Advisor chat follows the same pattern with its own schema validation for `scope`, `supporting_points`, `related_items`, and `suggested_follow_ups`.
+- AI Advisor warning flags normalize placeholder model values such as `none`, `null`, `n/a`, and empty strings to `null` before reaching the UI.
+- AI decision brief confidence notes are assembled from deterministic dataset summary metadata so they can state when recommendations are based on history plus current records and how many source records fed the analysis.
 - Trade-off verdict validation rejects invalid verdict labels, malformed JSON, unsupported revenue/profit/sales claims, and overlong text, then falls back to a deterministic verdict based on the same simulation metrics.
+- Trade-off verdict validation also checks semantic consistency against the server-computed simulated recommendation so GLM cannot contradict backend simulation output.
 
 ## Runtime Notes
 - App factory: `stockwise_api.api.app:create_app`

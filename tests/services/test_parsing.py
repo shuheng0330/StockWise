@@ -50,6 +50,25 @@ def test_parse_explanation_response_accepts_valid_json():
     assert parsed["recommended_action"] == "BUY_LESS"
 
 
+def test_parse_explanation_response_normalizes_false_warning_flag_to_string():
+    payload = """
+    {
+      "item_name": "Paneer",
+      "recommended_action": "BUY_LESS",
+      "priority_level": "MEDIUM",
+      "short_reason": "Paneer has high waste-cost exposure.",
+      "decision_explanation": "Paneer does not need a large top-up right now because waste risk is high.",
+      "tradeoff_summary": "Buying less lowers waste and cash risk while keeping the item under review.",
+      "suggested_next_step": "Place only a small top-up order if needed.",
+      "confidence_note": "Confidence is moderate based on recent usage.",
+      "warning_flag": false
+    }
+    """
+
+    parsed = parse_explanation_response(payload, _context())
+    assert parsed["warning_flag"] == ""
+
+
 def test_parse_explanation_response_rejects_bad_enum():
     payload = """
     {
@@ -172,6 +191,31 @@ def test_parse_tradeoff_verdict_response_rejects_unsupported_revenue_claims():
         parse_tradeoff_verdict_response(payload, _tradeoff_context())
 
 
+def test_parse_tradeoff_verdict_response_rejects_verdict_that_conflicts_with_simulation_action():
+    context = _tradeoff_context()
+    context.update(
+        {
+            "recommended_action": "RESTOCK_NOW",
+            "simulated_recommended_action": "RESTOCK_NOW",
+            "simulated_risk_change": "minimal_change",
+            "reorder_urgency_score": 32,
+            "simulated_reorder_urgency_score": 28,
+            "waste_risk_score": 27,
+            "simulated_waste_risk_score": 28,
+        }
+    )
+    payload = """
+    {
+      "verdict": "Try smaller quantity",
+      "reason": "Ordering this amount extends coverage beyond the best level.",
+      "confidence_note": "Based on simulated metrics."
+    }
+    """
+
+    with pytest.raises(TradeoffVerdictValidationError, match="conflicts"):
+        parse_tradeoff_verdict_response(payload, context)
+
+
 def test_build_fallback_tradeoff_verdict_returns_safe_payload():
     fallback = build_fallback_tradeoff_verdict(_tradeoff_context())
 
@@ -185,6 +229,26 @@ def test_build_fallback_tradeoff_verdict_returns_safe_payload():
     }
     assert fallback["reason"]
     assert fallback["safety_status"] == "fallback_used"
+
+
+def test_build_fallback_tradeoff_verdict_aligns_with_unchanged_restock_recommendation():
+    context = _tradeoff_context()
+    context.update(
+        {
+            "recommended_action": "RESTOCK_NOW",
+            "simulated_recommended_action": "RESTOCK_NOW",
+            "simulated_risk_change": "minimal_change",
+            "reorder_urgency_score": 32,
+            "simulated_reorder_urgency_score": 28,
+            "waste_risk_score": 27,
+            "simulated_waste_risk_score": 28,
+        }
+    )
+
+    fallback = build_fallback_tradeoff_verdict(context)
+
+    assert fallback["verdict"] == "Good emergency reorder"
+    assert "still needs restocking" in fallback["reason"]
 
 
 def _chat_context():
@@ -346,6 +410,34 @@ def test_parse_chat_response_normalizes_delay_restock_alias():
 
     parsed = parse_chat_response(payload, _chat_context())
     assert parsed["related_items"][0]["recommended_action"] == "DELAY_PURCHASE"
+    assert parsed["warning_flag"] is None
+
+
+def test_parse_chat_response_normalizes_placeholder_warning_strings():
+    payload = """
+    {
+      "scope": "analysis",
+      "answer": "Delay paneer for now.",
+      "supporting_points": [
+        "Paneer still has enough cover."
+      ],
+      "related_items": [
+        {
+          "item_id": 1,
+          "item_name": "Paneer",
+          "recommended_action": "BUY_LESS",
+          "reason": "Current cover is still acceptable."
+        }
+      ],
+      "suggested_follow_ups": [
+        "Which items can I delay?"
+      ],
+      "warning_flag": "N/A"
+    }
+    """
+
+    parsed = parse_chat_response(payload, _chat_context())
+    assert parsed["warning_flag"] is None
 
 
 def test_parse_chat_response_rejects_bad_scope():

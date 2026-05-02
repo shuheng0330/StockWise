@@ -54,6 +54,7 @@ CHAT_ACTION_ALIASES = {
     "DELAY_RESTOCK": "DELAY_PURCHASE",
     "DELAY_ORDER": "DELAY_PURCHASE",
 }
+EMPTY_WARNING_VALUES = {"", "none", "null", "n/a", "na", "no warning", "no warnings"}
 
 
 class ExplanationValidationError(ValueError):
@@ -114,6 +115,17 @@ def _normalize_chat_action(action: object) -> object:
     return CHAT_ACTION_ALIASES.get(action.strip().upper(), action)
 
 
+def _normalize_optional_warning(value: object) -> str | None:
+    if value is None or value is False:
+        return None
+    if value is True:
+        return "Review the highlighted inventory risks before ordering."
+    text = str(value).strip()
+    if text.lower() in EMPTY_WARNING_VALUES:
+        return None
+    return text
+
+
 def parse_explanation_response(payload: str, context: dict) -> dict:
     try:
         parsed = json.loads(payload)
@@ -130,12 +142,19 @@ def parse_explanation_response(payload: str, context: dict) -> dict:
     if parsed["item_name"] != context["item_name"]:
         raise ExplanationValidationError("Explanation response item_name does not match request item_name.")
 
-    for field in REQUIRED_FIELDS - {"item_name", "recommended_action", "priority_level"}:
+    text_fields = REQUIRED_FIELDS - {"item_name", "recommended_action", "priority_level"}
+    if parsed["warning_flag"] is False or parsed["warning_flag"] is None:
+        parsed["warning_flag"] = ""
+    elif parsed["warning_flag"] is True:
+        parsed["warning_flag"] = "Review the highlighted inventory risks before ordering."
+
+    for field in text_fields:
         value = str(parsed[field])
         if len(value) > MAX_FIELD_LENGTH:
             raise ExplanationValidationError(f"Explanation field '{field}' exceeds allowed length.")
         if UNSUPPORTED_PATTERN.search(value):
             raise ExplanationValidationError("Explanation response contains unsupported revenue/profit/sales claims.")
+        parsed[field] = value
 
     return parsed
 
@@ -151,6 +170,7 @@ def parse_tradeoff_verdict_response(payload: str, context: dict, safety_status: 
         raise TradeoffVerdictValidationError(f"Trade-off verdict response is missing fields: {sorted(missing)}")
     if parsed["verdict"] not in ALLOWED_TRADEOFF_VERDICTS:
         raise TradeoffVerdictValidationError("Trade-off verdict response contains invalid verdict.")
+    _validate_tradeoff_verdict_consistency(parsed["verdict"], context)
 
     for field in TRADEOFF_VERDICT_REQUIRED_FIELDS - {"verdict"}:
         value = str(parsed[field])
@@ -167,6 +187,20 @@ def parse_tradeoff_verdict_response(payload: str, context: dict, safety_status: 
         "confidence_note": str(parsed["confidence_note"]),
         "safety_status": safety_status,
     }
+
+
+def _validate_tradeoff_verdict_consistency(verdict: str, context: dict) -> None:
+    simulated_action = context.get("simulated_recommended_action", context.get("recommended_action"))
+    risk_change = context.get("simulated_risk_change", "minimal_change")
+    current_waste = int(context.get("waste_risk_score", 0))
+    simulated_waste = int(context.get("simulated_waste_risk_score", current_waste))
+    material_waste_increase = risk_change == "higher_waste_risk" and simulated_waste >= current_waste + 8
+
+    if simulated_action == "RESTOCK_NOW" and verdict in {"Try smaller quantity", "Too much stock"}:
+        if not material_waste_increase:
+            raise TradeoffVerdictValidationError(
+                "Trade-off verdict conflicts with the server-computed simulation recommendation."
+            )
 
 
 def parse_chat_response(payload: str, context: dict) -> dict:
@@ -236,13 +270,8 @@ def parse_chat_response(payload: str, context: dict) -> dict:
         if UNSUPPORTED_PATTERN.search(value):
             raise ChatValidationError("Chat response contains unsupported revenue/profit/sales claims.")
 
-    warning_flag = parsed["warning_flag"]
-    if warning_flag is False:
-        warning_flag = None
-        parsed["warning_flag"] = None
-    elif warning_flag is True:
-        warning_flag = "Review the highlighted inventory risks before ordering."
-        parsed["warning_flag"] = warning_flag
+    warning_flag = _normalize_optional_warning(parsed["warning_flag"])
+    parsed["warning_flag"] = warning_flag
     if warning_flag is not None:
         warning_value = str(warning_flag)
         if len(warning_value) > MAX_FIELD_LENGTH:
@@ -367,11 +396,9 @@ def parse_decision_brief_response(payload: str, context: dict, safety_status: st
         parsed["recommended_order"], "recommended_order", context, parsed
     )
     parsed["confidence_note"] = _validate_brief_text(parsed["confidence_note"], "confidence_note")
-    parsed["warning_flag"] = (
-        None
-        if parsed["warning_flag"] is None or parsed["warning_flag"] is False
-        else _validate_brief_text(parsed["warning_flag"], "warning_flag")
-    )
+    parsed["warning_flag"] = _normalize_optional_warning(parsed["warning_flag"])
+    if parsed["warning_flag"] is not None:
+        parsed["warning_flag"] = _validate_brief_text(parsed["warning_flag"], "warning_flag")
     parsed["safety_status"] = safety_status
     return parsed
 
@@ -431,21 +458,39 @@ def build_fallback_tradeoff_verdict(context: dict) -> dict:
     current_waste = int(context.get("waste_risk_score", 0))
     simulated_waste = int(context.get("simulated_waste_risk_score", current_waste))
 
-    if simulated_action == "RESTOCK_NOW" and risk_change == "lower_shortage_risk":
+    if simulated_action == "RESTOCK_NOW" and risk_change == "higher_waste_risk" and simulated_waste >= current_waste + 8:
+        verdict = "Cash-heavy but safe"
+        reason = (
+            f"{context['item_name']} still needs restocking, but this quantity materially raises waste risk."
+        )
+    elif simulated_action == "RESTOCK_NOW":
         verdict = "Good emergency reorder"
+        reason = (
+            f"{context['item_name']} still needs restocking; this quantity keeps the backend recommendation at restock now."
+        )
     elif risk_change == "higher_waste_risk" and simulated_waste >= current_waste + 8:
         verdict = "Too much stock"
+        reason = (
+            f"The simulation materially raises waste risk while changing the recommendation to "
+            f"{simulated_action.replace('_', ' ').lower()}."
+        )
     elif simulated_urgency <= current_urgency - 10 and risk_change == "higher_waste_risk":
         verdict = "Cash-heavy but safe"
+        reason = (
+            f"The simulation lowers urgency but raises waste risk, so review cash and cover together."
+        )
     elif simulated_action in {"DELAY_PURCHASE", "MONITOR_CLOSELY"} and current_action == "RESTOCK_NOW":
         verdict = "Worth it"
+        reason = (
+            f"The simulation moves {context['item_name']} away from restock now with "
+            f"{risk_change.replace('_', ' ')}."
+        )
     else:
         verdict = "Try smaller quantity"
-
-    reason = (
-        f"The simulation moves {context['item_name']} from {current_action.replace('_', ' ').lower()} "
-        f"to {simulated_action.replace('_', ' ').lower()} with {risk_change.replace('_', ' ')}."
-    )
+        reason = (
+            f"The simulation leaves {context['item_name']} at {simulated_action.replace('_', ' ').lower()} "
+            f"with {risk_change.replace('_', ' ')}."
+        )
     return {
         "source": "fallback",
         "verdict": verdict,
@@ -582,6 +627,10 @@ def build_fallback_decision_brief(context: dict) -> dict:
     ][:5]
     if not recommended_order:
         recommended_order = ["Review the ranked item table before placing orders."]
+    dataset_summary = context.get("analysis", {}).get("dataset_summary", {})
+    confidence_note = _history_confidence_note(dataset_summary, fallback=(
+        "Fallback brief generated from deterministic StockWise rules after AI output was unavailable or failed validation."
+    ))
     return {
         "source": "fallback",
         "summary": "Use the deterministic StockWise ranking: restock urgent items first, buy less where waste risk is high, and delay items with enough cover.",
@@ -594,7 +643,24 @@ def build_fallback_decision_brief(context: dict) -> dict:
             "Buying less lowers waste exposure but requires closer monitoring.",
         ],
         "recommended_order": recommended_order,
-        "confidence_note": "Fallback brief generated from deterministic StockWise rules after AI output was unavailable or failed validation.",
+        "confidence_note": confidence_note,
         "warning_flag": "Review records before ordering; the AI brief used a safe fallback.",
         "safety_status": "fallback_used",
     }
+
+
+def _history_confidence_note(dataset_summary: dict, *, fallback: str) -> str:
+    row_count = int(dataset_summary.get("row_count") or dataset_summary.get("total_rows") or 0)
+    item_count = int(dataset_summary.get("item_count") or dataset_summary.get("total_items") or 0)
+    record_count = row_count or item_count
+    if record_count <= 0:
+        return fallback
+    if row_count > item_count and item_count > 0:
+        return (
+            "High confidence from history + current records: deterministic daily usage rates "
+            f"and lead times over {row_count} records."
+        )
+    return (
+        "Confidence from current records: deterministic daily usage rates "
+        f"and lead times over {record_count} record{'s' if record_count != 1 else ''}."
+    )

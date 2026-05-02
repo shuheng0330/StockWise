@@ -14,3 +14,5 @@ Current history requirement:
 - Analysis snapshots must persist their exact source observation stream so future uploads can reliably append to that history after backend restarts.
 - Analysis snapshot persistence must not be skipped just because the longer `inventory_records` import persistence exceeded the response timeout.
 - The analysis snapshot write is a required persistence step; it must not use the short optional Supabase operation timeout that protects long inventory-record imports.
+- Live AI advisor and decision-brief text must remain readable when streamed by ZAI, including when spaces arrive as standalone response chunks.
+- Live AI explanation responses must always match the API response contract; boolean or null warning flags from providers represent no warning or a safe warning string, not raw JSON booleans.

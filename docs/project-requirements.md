@@ -150,6 +150,7 @@
   - `related_items[]` with `item_id`, `item_name`, `recommended_action`, and `reason`
   - `suggested_follow_ups[]`
   - `warning_flag`
+- Placeholder AI warning values such as `none`, `null`, `n/a`, or empty text must be normalized away and not shown as user-visible yellow warning labels.
 - AI decision brief returns:
   - `source`
   - `summary`
@@ -162,6 +163,7 @@
   - `confidence_note`
   - `warning_flag`
   - `safety_status`
+- AI decision brief confidence copy should reinforce whether the plan is grounded in history plus current records, using `dataset_summary.row_count` when historical source observations feed the current analysis.
 - Records endpoint returns:
   - `analysis_id`
   - `dataset_summary`
@@ -192,6 +194,7 @@
 - GLM outputs for explanations, AI Advisor chat, AI decision briefs, and simulation trade-off verdicts are parsed as JSON and validated before being returned to the user.
 - Hallucinated or unusable decision brief responses are rejected when they contain invalid JSON, missing fields, unknown item IDs, mismatched item names/actions, unsupported revenue/profit/sales claims, or overlong text.
 - Trade-off verdict responses are rejected when they contain invalid JSON, unsupported verdict labels, unsupported revenue/profit/sales claims, or overlong text.
+- Trade-off verdict responses are also rejected when the verdict label conflicts with the server-computed simulation recommendation, such as telling the user to try a smaller quantity while the simulated recommendation still remains `RESTOCK_NOW` without a material waste-risk increase.
 - The backend retries once with stricter JSON-only context after a validation failure.
 - If the retry fails or the provider is unavailable, the backend returns deterministic fallback AI payloads with `source = fallback` and `safety_status = fallback_used` where applicable.
 - The frontend keeps deterministic analysis visible and shows a visible safety state with a Review Records path so the owner can inspect or correct source data before ordering.
@@ -213,6 +216,8 @@
 - Receive a safe explanation payload even when model output is invalid.
 - Keep deterministic rankings visible when explanation generation fails.
 - Ask the AI Advisor grounded questions about the current analysis, including what to buy today, which items to delay, and why a category looks risky.
+- AI Advisor should not show placeholder warning labels such as `none`.
 - See an AI Decision Brief load independently after the dashboard appears, including safe fallback status when model output is unavailable or rejected.
+- See AI Decision Brief confidence copy that explains the analysis is grounded in deterministic daily usage rates, lead times, and the current history/current-record count when available.
 - From the simulation flow, hand off a simulated result back into the dashboard AI Advisor and ask what changed after the scenario.
 - Open Export Analysis and see a report-ready Business Value Snapshot with estimated monthly opportunity, suggested plan, and value-to-price ratio without cluttering the dashboard.
