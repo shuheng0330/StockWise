@@ -44,6 +44,17 @@ function getSourceBadgeColor(source: ChatResponse['source']) {
   }
 }
 
+export function normalizeAdvisorWarningFlag(value?: string | null) {
+  const text = value?.trim();
+  if (!text) {
+    return null;
+  }
+  if (['none', 'null', 'n/a', 'na', 'no warning', 'no warnings'].includes(text.toLowerCase())) {
+    return null;
+  }
+  return text;
+}
+
 export function AIAdvisorPanel({
   analysisId,
   onSendMessage,
@@ -307,11 +318,11 @@ export function AIAdvisorPanel({
 
                       <p className="text-lg font-semibold leading-relaxed text-slate-950">{entry.response.answer}</p>
 
-                      {entry.response.warning_flag && (
+                      {normalizeAdvisorWarningFlag(entry.response.warning_flag) && (
                         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-base text-amber-900">
                           <div className="flex items-start gap-2">
                             <AlertTriangle className="mt-0.5 h-4 w-4" />
-                            <p>{entry.response.warning_flag}</p>
+                            <p>{normalizeAdvisorWarningFlag(entry.response.warning_flag)}</p>
                           </div>
                         </div>
                       )}

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { DecisionBriefResponse } from '@/types';
-import { AIAdvisorPanel } from './AIAdvisorPanel';
+import { AIAdvisorPanel, normalizeAdvisorWarningFlag } from './AIAdvisorPanel';
 import { AIDecisionBriefCard } from './AIDecisionBriefCard';
 import { ExplanationDrawer } from './ExplanationDrawer';
 
@@ -91,6 +91,12 @@ describe('AIAdvisorPanel', () => {
     expect(html).toContain('Ask the AI Advisor');
     expect(html).not.toContain('AI Copilot');
     expect(html).not.toContain('Ask StockWise what to do next');
+  });
+
+  it('hides placeholder warning text returned by a model', () => {
+    expect(normalizeAdvisorWarningFlag('none')).toBeNull();
+    expect(normalizeAdvisorWarningFlag('N/A')).toBeNull();
+    expect(normalizeAdvisorWarningFlag('Review records before ordering.')).toBe('Review records before ordering.');
   });
 });
 

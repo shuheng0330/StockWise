@@ -75,6 +75,7 @@ TRADEOFF_VERDICT_SYSTEM_PROMPT = (
     "You are StockWise AI Trade-off Verdict for small cafe operators. "
     "Use only the provided current item metrics and server-computed simulation metrics. "
     "Choose exactly one verdict from: Worth it, Too much stock, Cash-heavy but safe, Try smaller quantity, Good emergency reorder. "
+    "If simulated_recommended_action is RESTOCK_NOW, do not say Try smaller quantity or Too much stock unless waste risk materially increases; prefer Good emergency reorder. "
     f"Return one JSON object with exactly these fields: {TRADEOFF_VERDICT_FIELDS}. "
     "Do not invent sales, revenue, profit, supplier facts, or outside market facts. "
     "Keep reason under 24 words and confidence_note under 18 words. "
@@ -164,7 +165,7 @@ def _tool_calls_to_text(tool_calls) -> str:
     return "".join(chunks)
 
 
-def _extract_choice_content(choice: dict) -> str:
+def _extract_choice_content(choice: dict, *, strip_fences: bool = True) -> str:
     message = choice.get("message") or {}
     delta = choice.get("delta") or {}
     candidates = (
@@ -178,7 +179,9 @@ def _extract_choice_content(choice: dict) -> str:
         choice.get("text"),
     )
     for candidate in candidates:
-        content = _strip_json_fences(_content_to_text(candidate))
+        content = _content_to_text(candidate)
+        if strip_fences:
+            content = _strip_json_fences(content)
         if content:
             return content
     return ""
@@ -480,6 +483,24 @@ def _narrative_text(value, fallback: str) -> str:
     return text or fallback
 
 
+def _decision_brief_confidence_note(context: dict, fallback: str) -> str:
+    dataset_summary = context.get("analysis", {}).get("dataset_summary", {}) or {}
+    row_count = int(dataset_summary.get("row_count") or dataset_summary.get("total_rows") or 0)
+    item_count = int(dataset_summary.get("item_count") or dataset_summary.get("total_items") or 0)
+    record_count = row_count or item_count
+    if record_count <= 0:
+        return fallback
+    if row_count > item_count and item_count > 0:
+        return (
+            "High confidence from history + current records: deterministic daily usage rates "
+            f"and lead times over {row_count} records."
+        )
+    return (
+        "Confidence from current records: deterministic daily usage rates "
+        f"and lead times over {record_count} record{'s' if record_count != 1 else ''}."
+    )
+
+
 def _narrative_text_list(value, fallback: list[str]) -> list[str]:
     if isinstance(value, list):
         items = [str(item).strip() for item in value if str(item).strip()]
@@ -579,9 +600,12 @@ def _assemble_live_decision_brief(context: dict, narrative: dict) -> str:
             ],
         ),
         "recommended_order": recommended_order,
-        "confidence_note": _narrative_text(
-            narrative.get("confidence_note"),
-            "Live brief grounded in deterministic StockWise metrics.",
+        "confidence_note": _decision_brief_confidence_note(
+            context,
+            fallback=_narrative_text(
+                narrative.get("confidence_note"),
+                "Live brief grounded in deterministic StockWise metrics.",
+            ),
         ),
         "warning_flag": _narrative_text(
             narrative.get("warning_flag"),
@@ -778,7 +802,10 @@ class MockZAIProvider(BaseZAIProvider):
                 item["item_name"]
                 for item in [*buy_today, *buy_less, *delay]
             ][:5],
-            "confidence_note": "Mock decision brief generated from grounded StockWise metrics.",
+            "confidence_note": _decision_brief_confidence_note(
+                context,
+                fallback="Mock decision brief generated from grounded StockWise metrics.",
+            ),
             "warning_flag": "Review records before placing orders.",
         }
         return json.dumps(response)
@@ -1035,7 +1062,7 @@ class LiveZAIProvider(BaseZAIProvider):
             if not choices:
                 continue
             choice = choices[0]
-            content = _extract_choice_content(choice)
+            content = _extract_choice_content(choice, strip_fences=False)
             if content:
                 chunks.append(content)
         combined = _strip_json_fences("".join(chunks))

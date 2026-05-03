@@ -629,6 +629,64 @@ def test_create_analysis_snapshot_persists_and_reads_exact_source_observations()
     assert record.source_observations == source_observations
 
 
+def test_get_analysis_snapshot_rebuilds_items_when_stored_item_results_are_incomplete():
+    client = FakeSupabaseClient()
+    store = SupabaseAnalysisStore(client)
+    source_observations = [
+        {
+            "date": "2025-06-10",
+            "item_id": 1,
+            "item_name": "Paneer",
+            "current_stock": 12.0,
+            "unit": "kg",
+            "usage_value": 2.0,
+            "usage_period": "daily",
+            "lead_time_days": 3,
+            "price_per_unit": 450.0,
+            "seasonal_factor": 1.1,
+            "category": "Dairy",
+            "subcategory": "Cheese",
+            "supplier_name": "Supplier A",
+            "recent_waste_percentage": 4.0,
+        },
+        {
+            "date": "2025-10-31",
+            "item_id": 2,
+            "item_name": "Rice",
+            "current_stock": 18.0,
+            "unit": "kg",
+            "usage_value": 3.0,
+            "usage_period": "daily",
+            "lead_time_days": 2,
+            "price_per_unit": 70.0,
+            "seasonal_factor": 1.0,
+            "category": "Grain",
+            "subcategory": "Staple",
+            "supplier_name": "Supplier B",
+            "recent_waste_percentage": 1.5,
+        },
+    ]
+
+    analysis_id = store.create_analysis_snapshot(
+        dataset_summary={
+            "row_count": 2,
+            "item_count": 2,
+            "date_range": {"start": "2025-06-10", "end": "2025-10-31"},
+        },
+        ranked_items=_ranked_items()[:1],
+        source_type="import",
+        created_by="user-1",
+        source_observations=source_observations,
+    )
+
+    record = store.get(analysis_id, user_id="user-1")
+
+    assert record.dataset_summary["item_count"] == 2
+    assert record.kpi_summary["item_count"] == 2
+    assert len(record.items) == 2
+    assert {item["item_name"] for item in record.items} == {"Paneer", "Rice"}
+
+
 def test_get_analysis_snapshot_recovers_source_observations_from_owned_import_batch():
     client = FakeSupabaseClient()
     store = SupabaseAnalysisStore(client)
